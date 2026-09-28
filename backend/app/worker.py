@@ -27,6 +27,21 @@ def sweep(session: Session, paths: MediaPaths, *, now: datetime | None = None) -
     return len(expired)
 
 
+def reset_stale(session: Session, paths: MediaPaths) -> int:
+    stale = session.exec(
+        select(Job).where(Job.status.in_([JobStatus.probing, JobStatus.encoding]))
+    ).all()
+    for job in stale:
+        paths.remove_job(job.id)
+        job.status = JobStatus.failed
+        job.error = "워커 재시작으로 작업이 중단되었습니다."
+        job.source_path = None
+        job.result_path = None
+        session.add(job)
+    session.commit()
+    return len(stale)
+
+
 def claim_next(session: Session) -> Job | None:
     job = session.exec(
         select(Job).where(Job.status == JobStatus.queued).order_by(Job.created_at)
@@ -157,6 +172,9 @@ def run_forever(settings: Settings | None = None) -> None:
     log.info("worker started; media_dir=%s", settings.media_dir)
 
     with Session(engine) as session:
+        stale = reset_stale(session, paths)
+        if stale:
+            log.info("reset %d stale in-flight jobs", stale)
         while True:
             try:
                 removed = sweep(session, paths)

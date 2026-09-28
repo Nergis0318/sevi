@@ -164,3 +164,26 @@ def test_process_job_marks_cancelled_if_cancelled_midflight(session, paths, sett
     process_job(session, job, settings=settings, paths=paths)
     session.refresh(job)
     assert job.status is JobStatus.cancelled
+
+
+def test_reset_stale_fails_stale_inflight_and_cleans_files(session, paths):
+    from app.worker import reset_stale
+
+    encoding = _make_job(session, paths, status=JobStatus.encoding)
+    probing = _make_job(session, paths, status=JobStatus.probing)
+    queued = _make_job(session, paths, status=JobStatus.queued)
+    done = _make_job(session, paths, status=JobStatus.done)
+
+    assert reset_stale(session, paths) == 2
+
+    for job in (encoding, probing):
+        session.refresh(job)
+        assert job.status is JobStatus.failed
+        assert job.error is not None
+        assert job.source_path is None
+        assert not paths.job_dir(job.id).exists()
+    session.refresh(queued)
+    assert queued.status is JobStatus.queued
+    session.refresh(done)
+    assert done.status is JobStatus.done
+    assert paths.job_dir(done.id).exists()
