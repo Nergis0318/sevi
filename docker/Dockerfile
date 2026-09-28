@@ -33,4 +33,6 @@ COPY backend/app ./app
 COPY --from=frontend /build/dist ./app/static
 
 EXPOSE 8000
-CMD ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --proxy-headers / --forwarded-allow-ips 필수: Traefik 뒤에서 X-Forwarded-For(클라이언트 IP,
+# IP+세션 리밋 키)와 X-Forwarded-Proto(https 감지 → Secure 쿠키)를 반영하려면 없으면 안 된다
+CMD ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]
