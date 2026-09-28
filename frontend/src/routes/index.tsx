@@ -21,7 +21,10 @@ export function App() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<JobStatusOut | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [warn, setWarn] = useState<string | null>(null);
   const timer = useRef<number | null>(null);
+  const pollFails = useRef(0);
+  const uploadAbort = useRef<AbortController | null>(null);
 
   const stopPolling = () => {
     if (timer.current != null) {
@@ -35,9 +38,12 @@ export function App() {
   useEffect(() => {
     if (!jobId) return;
     stopPolling();
+    pollFails.current = 0;
     timer.current = window.setInterval(async () => {
       try {
         const j = await getJob(jobId);
+        pollFails.current = 0;
+        setWarn(null);
         setJob(j);
         if (
           j.status === "done" ||
@@ -48,8 +54,15 @@ export function App() {
           stopPolling();
         }
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-        stopPolling();
+        pollFails.current += 1;
+        if (pollFails.current >= 5) {
+          setError(e instanceof Error ? e.message : String(e));
+          stopPolling();
+        } else {
+          setWarn(
+            `상태 확인에 실패했습니다. 재시도 중… (${pollFails.current}/5)`,
+          );
+        }
       }
     }, 2000);
     return stopPolling;
@@ -66,11 +79,15 @@ export function App() {
       setUploadPct(0);
       setJob(null);
       setJobId(null);
+      const ac = new AbortController();
+      uploadAbort.current = ac;
       try {
-        const created = await uploadJob(file, setUploadPct);
+        const created = await uploadJob(file, setUploadPct, ac.signal);
+        if (ac.signal.aborted) return;
         setJobId(created.id);
         setPhase("job");
       } catch (e) {
+        if (ac.signal.aborted) return;
         setError(e instanceof Error ? e.message : String(e));
         setPhase("idle");
       }
@@ -79,11 +96,14 @@ export function App() {
   );
 
   const reset = () => {
+    uploadAbort.current?.abort();
+    uploadAbort.current = null;
     stopPolling();
     setPhase("idle");
     setJob(null);
     setJobId(null);
     setError(null);
+    setWarn(null);
     setUploadPct(0);
   };
 
@@ -122,6 +142,7 @@ export function App() {
       )}
 
       {error && <p className="err">{error}</p>}
+      {warn && <p className="muted">{warn}</p>}
 
       {phase !== "idle" && (
         <p>

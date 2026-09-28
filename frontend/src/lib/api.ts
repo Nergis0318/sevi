@@ -54,6 +54,7 @@ export function downloadUrl(id: string): string {
 export function uploadJob(
   file: File,
   onProgress: (fraction: number) => void,
+  signal?: AbortSignal,
 ): Promise<JobCreated> {
   return new Promise((resolve, reject) => {
     const form = new FormData();
@@ -65,6 +66,10 @@ export function uploadJob(
       if (e.lengthComputable) onProgress(e.loaded / e.total);
     };
     xhr.onload = () => {
+      if (signal?.aborted) {
+        reject(new DOMException("업로드가 중단되었습니다.", "AbortError"));
+        return;
+      }
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(xhr.response as JobCreated);
       } else {
@@ -73,6 +78,12 @@ export function uploadJob(
       }
     };
     xhr.onerror = () => reject(new Error("네트워크 오류가 발생했습니다."));
+    xhr.onabort = () => reject(new DOMException("업로드가 중단되었습니다.", "AbortError"));
+    if (signal) signal.addEventListener("abort", () => xhr.abort(), { once: true });
+    if (signal?.aborted) {
+      xhr.abort();
+      return;
+    }
     xhr.send(form);
   });
 }
