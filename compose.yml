@@ -40,8 +40,8 @@ services:
     devices:
       - /dev/dri:/dev/dri
     group_add:
-      - "video"
-      - "render"
+      - "${SEVI_GID_VIDEO:-44}"
+      - "${SEVI_GID_RENDER:-992}"
     volumes:
       - media-data:/media
     depends_on:
@@ -61,8 +61,8 @@ services:
     devices:
       - /dev/dri:/dev/dri
     group_add:
-      - "video"
-      - "render"
+      - "${SEVI_GID_VIDEO:-44}"
+      - "${SEVI_GID_RENDER:-992}"
     volumes:
       - media-data:/media
     depends_on:
