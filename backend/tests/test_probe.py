@@ -1,8 +1,27 @@
+import json
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
 from app.probe import ProbeError, ProbeResult, probe
+
+
+def _stub_probe(monkeypatch, *, streams, fmt):
+    def fake_run(cmd, capture_output=True, text=True, timeout=None):
+        payload = {"streams": streams, "format": fmt}
+        return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr("app.probe.subprocess.run", fake_run)
+
+
+_VIDEO_ONLY = [{"codec_type": "video", "width": 640, "height": 360, "avg_frame_rate": "30/1"}]
+
+
+def _touch(tmp_path):
+    f = tmp_path / "source.bin"
+    f.write_bytes(b"x")  # 비어 있지 않게 — 빈 파일 가드를 통과시키기 위함
+    return f
 
 
 @pytest.fixture(scope="module")
@@ -77,8 +96,36 @@ def test_probe_rejects_overlong_duration(clip_with_audio):
         probe(clip_with_audio, max_duration_s=0.5)
 
 
-def test_probe_zero_duration_rejected(tmp_path):
+def test_probe_rejects_empty_file(tmp_path):
     empty = tmp_path / "empty.bin"
     empty.write_bytes(b"")
     with pytest.raises(ProbeError):
         probe(empty)
+
+
+def test_probe_zero_duration_rejected(monkeypatch, tmp_path):
+    f = _touch(tmp_path)
+    _stub_probe(monkeypatch, streams=_VIDEO_ONLY, fmt={"duration": "0.000000"})
+    with pytest.raises(ProbeError):
+        probe(f)
+
+
+def test_probe_fps_parsed_from_avg_frame_rate(monkeypatch, tmp_path):
+    f = _touch(tmp_path)
+    streams = [dict(_VIDEO_ONLY[0], avg_frame_rate="25/1")]
+    _stub_probe(monkeypatch, streams=streams, fmt={"duration": "2.0"})
+    assert probe(f).fps == 25.0
+
+
+def test_probe_fps_fallback_when_unknown_rate(monkeypatch, tmp_path):
+    f = _touch(tmp_path)
+    streams = [dict(_VIDEO_ONLY[0], avg_frame_rate="0/0")]
+    _stub_probe(monkeypatch, streams=streams, fmt={"duration": "2.0"})
+    assert probe(f).fps == 30.0
+
+
+def test_probe_fps_fallback_when_unparseable(monkeypatch, tmp_path):
+    f = _touch(tmp_path)
+    streams = [dict(_VIDEO_ONLY[0], avg_frame_rate="garbage")]
+    _stub_probe(monkeypatch, streams=streams, fmt={"duration": "2.0"})
+    assert probe(f).fps == 30.0
