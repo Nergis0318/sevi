@@ -16,7 +16,7 @@ services:
     image: postgres:16
     environment:
       POSTGRES_USER: sevi
-      POSTGRES_PASSWORD: ${SEVI_DB_PASSWORD:-sevi}
+      POSTGRES_PASSWORD: ${SEVI_DB_PASSWORD:?SEVI_DB_PASSWORD 미설정 — `cp .env.example .env` 후 값을 바꾸세요}
       POSTGRES_DB: sevi
     volumes:
       - db-data:/var/lib/postgresql/data
@@ -31,9 +31,9 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     environment: &appenv
-      SEVI_DATABASE_URL: postgresql+psycopg://sevi:${SEVI_DB_PASSWORD:-sevi}@db:5432/sevi
+      SEVI_DATABASE_URL: postgresql+psycopg://sevi:${SEVI_DB_PASSWORD:?SEVI_DB_PASSWORD 미설정}@db:5432/sevi
       SEVI_MEDIA_DIR: /media
-      SEVI_SESSION_SECRET: ${SEVI_SESSION_SECRET:-change-me-in-production}
+      SEVI_SESSION_SECRET: ${SEVI_SESSION_SECRET:?SEVI_SESSION_SECRET 미설정 — 긴 임의 문자열로 바꾸세요}
       SEVI_TARGET_BYTES: "49900000"
       SEVI_MAX_UPLOAD_BYTES: "838860800"
       LIBVA_DRIVER_NAME: iHD
