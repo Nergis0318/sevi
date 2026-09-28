@@ -1,0 +1,23 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.5;
+}
+body { margin: 0; }
+#root { max-width: 720px; margin: 0 auto; padding: 2rem 1rem; }
+.drop {
+  border: 2px dashed #8884; border-radius: 12px; padding: 3rem 1rem;
+  text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+}
+.drop.over { border-color: #4f8; background: #4f81; }
+.bar { height: 10px; background: #8883; border-radius: 999px; overflow: hidden; }
+.bar > i { display: block; height: 100%; background: #4f8; transition: width .3s; }
+.card { border: 1px solid #8883; border-radius: 12px; padding: 1.25rem; margin-top: 1rem; }
+.row { display: flex; justify-content: space-between; padding: .25rem 0; }
+.muted { opacity: .65; font-size: .9em; }
+.err { color: #e55; }
+button {
+  font: inherit; padding: .65rem 1.25rem; border-radius: 10px; border: 0;
+  background: #4f8; color: #062; cursor: pointer; font-weight: 600;
+}
+button:disabled { opacity: .5; cursor: not-allowed; }
