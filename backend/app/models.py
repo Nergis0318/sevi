@@ -49,3 +49,11 @@ def count_active(session: Session, session_id: str) -> int:
         .where(Job.session_id == session_id, Job.status.in_(ACTIVE_STATES))
     )
     return int(session.exec(stmt).one())
+
+
+def count_queued(session: Session) -> int:
+    """전역 대기 중 잡 수 — 디스크 포화 방지용 상한."""
+    from sqlmodel import func, select
+
+    stmt = select(func.count()).select_from(Job).where(Job.status == JobStatus.queued)
+    return int(session.exec(stmt).one())

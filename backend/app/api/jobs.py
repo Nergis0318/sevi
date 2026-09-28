@@ -1,13 +1,13 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 
-from app.api.deps import get_limiter, get_settings_dep, require_session
+from app.api.deps import client_ip, get_limiter, get_settings_dep, require_session
 from app.db import get_session
-from app.models import Job, JobStatus, count_active
+from app.models import ACTIVE_STATES, Job, JobStatus, count_active, count_queued
 from app.paths import MediaPaths
 from app.ratelimit import RateLimitError, RateLimiter
 from app.schemas import JobCreated, JobStatusOut
@@ -44,13 +44,14 @@ def _get_owned(job_id: uuid.UUID, session_id: str, session: Session) -> Job:
 
 @router.post("/jobs", response_model=JobCreated, status_code=201)
 async def create_job(
+    request: Request,
     file: UploadFile,
     session_id: str = Depends(require_session),
     settings: Settings = Depends(get_settings_dep),
     limiter: RateLimiter = Depends(get_limiter),
     session: Session = Depends(get_session),
 ) -> JobCreated:
-    key = session_id
+    key = f"{client_ip(request)}|{session_id}"
     try:
         limiter.check_upload(key)
     except RateLimitError as exc:
@@ -65,6 +66,13 @@ async def create_job(
             status_code=429,
             detail="이미 진행 중인 작업이 있습니다. 완료 후 다시 시도해 주세요.",
             headers={"Retry-After": "30"},
+        )
+
+    if count_queued(session) >= settings.max_queued_jobs:
+        raise HTTPException(
+            status_code=429,
+            detail="현재 대기 중인 작업이 많습니다. 잠시 후 다시 시도해 주세요.",
+            headers={"Retry-After": "60"},
         )
 
     job_id = uuid.uuid4()
@@ -138,8 +146,15 @@ def delete_job(
     session_id: str = Depends(require_session),
     settings: Settings = Depends(get_settings_dep),
     session: Session = Depends(get_session),
-) -> None:
+) -> Response:
     job = _get_owned(job_id, session_id, session)
+    if job.status in ACTIVE_STATES:
+        job.status = JobStatus.cancelled
+        job.error = "사용자가 취소했습니다."
+        session.add(job)
+        session.commit()
+        return Response(status_code=202)
     _paths(settings).remove_job(job_id)
     session.delete(job)
     session.commit()
+    return Response(status_code=204)

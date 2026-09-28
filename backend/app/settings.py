@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     session_cookie: str = "sv_session"
     session_ttl_days: int = 7
     rate_limit_per_hour: int = 5
+    max_queued_jobs: int = 20
     min_video_kbps: int = 80
     max_attempts: int = 3
     encode_preset: str = "medium"

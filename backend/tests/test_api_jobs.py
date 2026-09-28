@@ -8,6 +8,7 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from app.db import get_session
 from app.main import create_app
+from app.models import Job, JobStatus
 from app.paths import MediaPaths
 from app.settings import Settings
 
@@ -110,14 +111,32 @@ def test_empty_upload_rejected(client):
     assert r.status_code == 400
 
 
-def test_delete_removes_job_and_files(client, settings):
+def test_delete_in_flight_marks_cancelled_not_deleted(client, settings):
     job_id = _upload(client).json()["id"]
     paths = MediaPaths(settings.media_dir)
-    assert paths.source(UUID(job_id)).is_file()
+    r = client.delete(f"/api/jobs/{job_id}")
+    assert r.status_code == 202
+    with Session(client.engine) as s:
+        job = s.get(Job, UUID(job_id))
+        assert job is not None
+        assert job.status is JobStatus.cancelled
+        assert job.error == "사용자가 취소했습니다."
+    assert paths.source(UUID(job_id)).exists()
+
+
+def test_delete_terminal_job_removes_row(client, settings):
+    job_id = _upload(client).json()["id"]
+    with Session(client.engine) as s:
+        job = s.get(Job, UUID(job_id))
+        job.status = JobStatus.done
+        s.add(job)
+        s.commit()
+    paths = MediaPaths(settings.media_dir)
     r = client.delete(f"/api/jobs/{job_id}")
     assert r.status_code == 204
     assert not paths.job_dir(UUID(job_id)).exists()
-    assert client.get(f"/api/jobs/{job_id}").status_code == 404
+    with Session(client.engine) as s:
+        assert s.get(Job, UUID(job_id)) is None
 
 
 def test_rate_limit_returns_429(tmp_path):
@@ -196,3 +215,77 @@ def test_active_slot_blocks_second_upload(settings):
         second = c.post("/api/jobs", files={"file": ("b.mp4", io.BytesIO(b"x"), "video/mp4")})
         assert second.status_code == 429
         assert "진행 중" in second.json()["detail"]
+
+
+def test_rate_limit_keyed_on_ip_and_session(tmp_path):
+    """리밋 키는 IP+세션 복합 — 쿠키 폐기/세션 재사용으로 우회 불가."""
+    settings = Settings(
+        database_url="sqlite://",
+        media_dir=tmp_path / "media",
+        session_secret="test-secret",
+        rate_limit_per_hour=1,
+    )
+    engine = create_engine(
+        settings.database_url,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+
+    def _override():
+        with Session(engine) as s:
+            yield s
+
+    app = create_app(settings)
+    app.dependency_overrides[get_session] = _override
+    with TestClient(app) as c:
+        r1 = c.post(
+            "/api/jobs",
+            files={"file": ("a.mp4", io.BytesIO(b"x"), "video/mp4")},
+            headers={"X-Forwarded-For": "1.1.1.1"},
+        )
+        assert r1.status_code == 201
+        c.delete(f"/api/jobs/{r1.json()['id']}")  # 활성 슬롯 해제 — 리밋만 검사
+        r2 = c.post(
+            "/api/jobs",
+            files={"file": ("b.mp4", io.BytesIO(b"x"), "video/mp4")},
+            headers={"X-Forwarded-For": "2.2.2.2"},
+        )
+        assert r2.status_code == 201  # 동일 세션, 다른 IP → 별도 버킷
+        c.delete(f"/api/jobs/{r2.json()['id']}")
+        r3 = c.post(
+            "/api/jobs",
+            files={"file": ("c.mp4", io.BytesIO(b"x"), "video/mp4")},
+            headers={"X-Forwarded-For": "1.1.1.1"},
+        )
+        assert r3.status_code == 429  # 1.1.1.1|sid 버킷 소진
+
+
+def test_global_queue_cap(tmp_path):
+    """전역 대기 큐 상한 — 세션을 바꿔도 디스크 포화 공격이 불가능하다."""
+    settings = Settings(
+        database_url="sqlite://",
+        media_dir=tmp_path / "media",
+        session_secret="test-secret",
+        rate_limit_per_hour=100,
+        max_queued_jobs=1,
+    )
+    engine = create_engine(
+        settings.database_url,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+
+    def _override():
+        with Session(engine) as s:
+            yield s
+
+    app = create_app(settings)
+    app.dependency_overrides[get_session] = _override
+    with TestClient(app) as c:
+        assert c.post("/api/jobs", files={"file": ("a.mp4", io.BytesIO(b"x"), "video/mp4")}).status_code == 201
+        c.cookies.clear()  # 완전히 다른 세션
+        r2 = c.post("/api/jobs", files={"file": ("b.mp4", io.BytesIO(b"x"), "video/mp4")})
+        assert r2.status_code == 429
+        assert r2.headers["Retry-After"] == "60"
