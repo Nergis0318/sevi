@@ -51,10 +51,23 @@ def test_plan_respects_min_video_kbps():
     assert plan.video_kbps >= 80
 
 
-def test_plan_audio_capped_at_12_percent():
-    # 아주 짧은 영상이면 오디오가 12%를 넘지 않음
-    plan = plan_encode(duration_s=5.0, fps=30.0, src_width=640, src_height=360, has_audio=True, target_bytes=TARGET)
-    budget_bps = TARGET * 8 / 5.0
+def test_plan_audio_cap_is_binding():
+    # 800s: budget_bps = 49.9e6*8/800 = 499000, capped = int(499000*0.12/1000) = 59
+    # 기본값 96 이 아니라 12% 상한이 실제로 구속되는 구간이다.
+    plan = plan_encode(duration_s=800.0, fps=30.0, src_width=640, src_height=360, has_audio=True, target_bytes=TARGET)
+    assert plan.audio_kbps == 59
+    assert plan.audio_kbps < 96
+    budget_bps = TARGET * 8 / 800.0
+    assert plan.audio_kbps * 1000 <= budget_bps * 0.12
+
+
+def test_plan_audio_cap_wins_over_floor():
+    # 1200s: budget_bps = 332666, capped = 39 < 하한 48
+    # 상한이 하한보다 우선한다 — 아니면 오디오가 예산을 먹어 긴 영상이 항상 초과된다.
+    plan = plan_encode(duration_s=1200.0, fps=30.0, src_width=640, src_height=360, has_audio=True, target_bytes=TARGET)
+    assert plan.audio_kbps == 39
+    assert plan.audio_kbps < 48
+    budget_bps = TARGET * 8 / 1200.0
     assert plan.audio_kbps * 1000 <= budget_bps * 0.12
 
 

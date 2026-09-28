@@ -49,8 +49,10 @@ def plan_encode(
 
     audio_kbps = 0
     if has_audio:
-        audio_kbps = int(min(AUDIO_DEFAULT_KBPS, budget_bps * AUDIO_SHARE_CAP / 1000))
-        audio_kbps = max(audio_kbps, AUDIO_MIN_KBPS)
+        capped = int(budget_bps * AUDIO_SHARE_CAP / 1000)
+        audio_kbps = min(AUDIO_DEFAULT_KBPS, capped)
+        if capped >= AUDIO_MIN_KBPS:
+            audio_kbps = max(audio_kbps, AUDIO_MIN_KBPS)
 
     video_bps = budget_bps * CONTAINER_MARGIN - audio_kbps * 1000
     video_kbps = max(int(video_bps / 1000), min_video_kbps)
