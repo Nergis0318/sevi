@@ -4,15 +4,13 @@ from app.ratelimit import RateLimiter
 from app.session import SESSION_COOKIE, issue, verify
 from app.settings import Settings
 
-_limiter = RateLimiter(per_hour=5)
-
 
 def get_settings_dep(request: Request) -> Settings:
     return request.app.state.settings
 
 
-def get_limiter() -> RateLimiter:
-    return _limiter
+def get_limiter(request: Request) -> RateLimiter:
+    return request.app.state.limiter
 
 
 def require_session(

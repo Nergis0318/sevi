@@ -1,5 +1,4 @@
 import io
-from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -121,15 +120,17 @@ def test_delete_removes_job_and_files(client, settings):
     assert client.get(f"/api/jobs/{job_id}").status_code == 404
 
 
-def test_rate_limit_returns_429(monkeypatch):
+def test_rate_limit_returns_429(tmp_path):
     settings = Settings(
         database_url="sqlite://",
-        media_dir=Path("/tmp/sevi-test-rate"),
+        media_dir=tmp_path / "media",
         session_secret="test-secret",
         rate_limit_per_hour=1,
     )
     engine = create_engine(
-        settings.database_url, connect_args={"check_same_thread": False}, poolclass=StaticPool
+        settings.database_url,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
     SQLModel.metadata.create_all(engine)
 
@@ -140,13 +141,40 @@ def test_rate_limit_returns_429(monkeypatch):
     app = create_app(settings)
     app.dependency_overrides[get_session] = _override
     with TestClient(app) as c:
-        import app.api.deps as deps
-
-        monkeypatch.setattr(deps, "_limiter", deps.RateLimiter(per_hour=1))
         assert c.post("/api/jobs", files={"file": ("a.mp4", io.BytesIO(b"x"), "video/mp4")}).status_code == 201
         r = c.post("/api/jobs", files={"file": ("b.mp4", io.BytesIO(b"x"), "video/mp4")})
         assert r.status_code == 429
         assert "Retry-After" in r.headers
+
+
+def test_rate_limit_honours_settings(tmp_path):
+    """Settings.rate_limit_per_hour 가 실제로 적용되어야 한다 — 데드 노브 회귀 가드."""
+    for per_hour, expect_second in ((2, 201), (1, 429)):
+        settings = Settings(
+            database_url="sqlite://",
+            media_dir=tmp_path / f"m{per_hour}",
+            session_secret="test-secret",
+            rate_limit_per_hour=per_hour,
+        )
+        engine = create_engine(
+            settings.database_url,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        SQLModel.metadata.create_all(engine)
+
+        def _override():
+            with Session(engine) as s:
+                yield s
+
+        app = create_app(settings)
+        app.dependency_overrides[get_session] = _override
+        with TestClient(app) as c:
+            first = c.post("/api/jobs", files={"file": ("a.mp4", io.BytesIO(b"x"), "video/mp4")})
+            assert first.status_code == 201
+            c.delete(f"/api/jobs/{first.json()['id']}")  # 활성 슬롯 해제 — 리밋만 검사
+            r = c.post("/api/jobs", files={"file": ("b.mp4", io.BytesIO(b"x"), "video/mp4")})
+            assert r.status_code == expect_second
 
 
 def test_active_slot_blocks_second_upload(settings):
