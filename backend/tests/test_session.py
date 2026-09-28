@@ -37,3 +37,11 @@ def test_verify_rejects_garbage():
     assert verify(SECRET, "") is None
     assert verify(SECRET, "no-dot-here") is None
     assert verify(SECRET, ".") is None
+
+
+def test_verify_rejects_non_ascii_signature():
+    assert verify(SECRET, "deadbeef." + "\xff" * 44) is None
+
+
+def test_verify_rejects_non_ascii_whole_value():
+    assert verify(SECRET, "\xff.\xff") is None

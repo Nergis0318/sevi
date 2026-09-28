@@ -20,6 +20,11 @@ def verify(secret: str, cookie_value: str) -> str | None:
     session_id, _, sig = cookie_value.rpartition(".")
     if not session_id or not sig:
         return None
-    if not hmac.compare_digest(sig, _sign(secret, session_id)):
+    expected = _sign(secret, session_id)
+    try:
+        matched = hmac.compare_digest(sig.encode("ascii"), expected.encode("ascii"))
+    except UnicodeEncodeError:
+        return None  # 비ASCII 위조값 — compare_digest 는 str 에 ASCII 만 허용
+    if not matched:
         return None
     return session_id

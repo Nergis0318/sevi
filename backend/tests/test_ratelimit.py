@@ -41,3 +41,15 @@ def test_keys_are_independent():
     rl = RateLimiter(per_hour=1, clock=clock)
     rl.check_upload("a")
     rl.check_upload("b")  # 다른 키는 영향 없음
+
+
+def test_expired_keys_are_evicted():
+    clock = FakeClock()
+    rl = RateLimiter(per_hour=5, clock=clock)
+    for i in range(50):
+        rl.check_upload(f"k{i}")
+    # rl._uploads 직접 접근은 의도적 — 메모리 누수는 달리 관찰 불가
+    assert len(rl._uploads) == 50
+    clock.t += 3601
+    rl.check_upload("fresh")
+    assert len(rl._uploads) == 1  # 지난 키는 전부 제거, 새 키만 남음

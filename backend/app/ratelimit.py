@@ -26,9 +26,20 @@ class RateLimiter:
         self._uploads: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
 
+    def _evict(self, now: float) -> None:
+        """창을 지난 키와 빈 deque 를 제거 — 세션 무한 생성에 따른 메모리 증식 방지."""
+        stale = [
+            k
+            for k, q in self._uploads.items()
+            if not q or now - q[-1] > self._window
+        ]
+        for k in stale:
+            del self._uploads[k]
+
     def check_upload(self, key: str) -> None:
         now = self._clock()
         with self._lock:
+            self._evict(now)
             q = self._uploads.setdefault(key, deque())
             while q and now - q[0] > self._window:
                 q.popleft()
