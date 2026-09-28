@@ -17,6 +17,10 @@ from app.settings import Settings, get_settings
 log = logging.getLogger("sevi.worker")
 
 
+class JobCancelled(Exception):
+    """진행 중 잡이 사용자 취소되었을 때 인코딩을 중단하는 신호."""
+
+
 def sweep(session: Session, paths: MediaPaths, *, now: datetime | None = None) -> int:
     now = now or datetime.now(timezone.utc)
     expired = session.exec(select(Job).where(Job.expires_at < now)).all()
@@ -98,6 +102,9 @@ def process_job(
         dst = paths.result(job.id)
 
         def _run(kbps: int) -> int:
+            session.refresh(job)
+            if job.status is JobStatus.cancelled:
+                raise JobCancelled()
             job.status = JobStatus.encoding
             job.attempt += 1
             job.progress = 0.0
@@ -133,6 +140,9 @@ def process_job(
                 f"{(result.result_bytes - settings.target_bytes) // 1_000_000}MB 초과했습니다."
             )
 
+    except JobCancelled:
+        job.status = JobStatus.cancelled
+        job.error = "사용자가 취소했습니다."
     except ProbeError as exc:
         job.status = JobStatus.failed
         job.error = str(exc)
@@ -144,6 +154,8 @@ def process_job(
         job.source_path = None
         if src.exists():
             src.unlink(missing_ok=True)
+        if job.status is JobStatus.cancelled:
+            paths.result(job.id).unlink(missing_ok=True)
         session.add(job)
         session.commit()
 
@@ -156,11 +168,31 @@ def _make_progress_cb(session: Session, job: Job):
         if now - last["t"] < 1.0 and fraction < 1.0:
             return
         last["t"] = now
+        session.refresh(job)
+        if job.status is JobStatus.cancelled:
+            raise JobCancelled()
         job.progress = max(0.0, min(1.0, fraction))
         session.add(job)
         session.commit()
 
     return cb
+
+
+def tick(session: Session, paths: MediaPaths, settings: Settings) -> None:
+    try:
+        removed = sweep(session, paths)
+        if removed:
+            log.info("swept %d expired jobs", removed)
+        job = claim_next(session)
+        if job is not None:
+            log.info("processing job %s", job.id)
+            process_job(session, job, settings=settings, paths=paths)
+    except Exception:  # noqa: BLE001
+        log.exception("worker tick failed")
+        try:
+            session.rollback()
+        except Exception:  # noqa: BLE001
+            log.exception("session rollback failed")
 
 
 def run_forever(settings: Settings | None = None) -> None:
@@ -176,16 +208,7 @@ def run_forever(settings: Settings | None = None) -> None:
         if stale:
             log.info("reset %d stale in-flight jobs", stale)
         while True:
-            try:
-                removed = sweep(session, paths)
-                if removed:
-                    log.info("swept %d expired jobs", removed)
-                job = claim_next(session)
-                if job is not None:
-                    log.info("processing job %s", job.id)
-                    process_job(session, job, settings=settings, paths=paths)
-            except Exception:  # noqa: BLE001
-                log.exception("worker tick failed")
+            tick(session, paths, settings)
             time.sleep(settings.worker_poll_s)
 
 

@@ -84,23 +84,28 @@ def encode_once(
     t = threading.Thread(target=_drain, daemon=True)
     t.start()
 
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        line = line.strip()
-        if line.startswith("out_time_ms=") and on_progress is not None:
-            raw = line.split("=", 1)[1]
-            if raw and raw != "N/A" and plan.duration_s > 0:
-                try:
-                    ms = int(raw)
-                except ValueError:
-                    continue
-                on_progress(min(1.0, ms / 1_000_000 / plan.duration_s))
-        elif line.startswith("progress=") and line.endswith("end"):
-            if on_progress is not None:
-                on_progress(1.0)
-
-    rc = proc.wait()
-    t.join(timeout=5)
+    rc = 1
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.strip()
+            if line.startswith("out_time_ms=") and on_progress is not None:
+                raw = line.split("=", 1)[1]
+                if raw and raw != "N/A" and plan.duration_s > 0:
+                    try:
+                        ms = int(raw)
+                    except ValueError:
+                        continue
+                    on_progress(min(1.0, ms / 1_000_000 / plan.duration_s))
+            elif line.startswith("progress=") and line.endswith("end"):
+                if on_progress is not None:
+                    on_progress(1.0)
+    except BaseException:
+        proc.terminate()
+        raise
+    finally:
+        rc = proc.wait()
+        t.join(timeout=5)
 
     if rc != 0:
         stderr = "".join(err_lines)[-2000:]

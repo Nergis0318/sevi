@@ -98,3 +98,26 @@ def test_encode_failure_raises(tmp_path):
     with pytest.raises(EncodeError) as ei:
         encode_once(src=missing, dst=tmp_path / "o.webm", plan=plan, video_kbps=500)
     assert ei.value.stderr
+
+
+def test_encode_reaps_process_when_on_progress_raises(src_av, tmp_path, monkeypatch):
+    """on_progress 가 예외를 던져도 ffmpeg 자식이 회수되어 QSV 가 점유되지 않는다."""
+    import subprocess as sp
+
+    procs = []
+    real_popen = sp.Popen
+
+    def spy(*a, **k):
+        p = real_popen(*a, **k)
+        procs.append(p)
+        return p
+
+    monkeypatch.setattr("app.ffmpeg.subprocess.Popen", spy)
+    plan = plan_encode(duration_s=4.0, fps=30.0, src_width=1280, src_height=720, has_audio=True, target_bytes=2_000_000)
+
+    def boom(_fraction: float) -> None:
+        raise RuntimeError("cancel")
+
+    with pytest.raises(RuntimeError):
+        encode_once(src=src_av, dst=tmp_path / "out.webm", plan=plan, video_kbps=plan.video_kbps, on_progress=boom)
+    assert procs and procs[0].poll() is not None

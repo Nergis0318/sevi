@@ -166,6 +166,59 @@ def test_process_job_marks_cancelled_if_cancelled_midflight(session, paths, sett
     assert job.status is JobStatus.cancelled
 
 
+def test_process_job_stops_on_cancel(session, paths, settings, monkeypatch):
+    """진행 콜백 중에 취소되면 인코딩을 멈추고 부분 결과를 정리한다."""
+    job = _make_job(session, paths)
+    monkeypatch.setattr(
+        "app.worker.probe",
+        lambda *a, **k: ProbeResult(duration_s=2.0, width=640, height=360, fps=30.0, has_audio=True),
+    )
+    monkeypatch.setattr(
+        "app.worker.plan_encode",
+        lambda **k: EncodePlan(video_kbps=500, audio_kbps=96, height=360, has_audio=True, fps=30.0, duration_s=2.0),
+    )
+
+    def fake_encode(**kwargs):
+        cb = kwargs["on_progress"]
+        dst = kwargs["dst"]
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(b"partial")
+
+        def cb_cancel(fraction: float) -> None:
+            job.status = JobStatus.cancelled  # API DELETE 와 동일한 시점의 취소
+            session.commit()
+            cb(fraction)  # 워커 콜백이 refresh 로 취소를 감지해야 한다
+
+        cb_cancel(0.5)
+        raise AssertionError("encode must stop after cancel")
+
+    process_job(session, job, settings=settings, paths=paths, encode_fn=fake_encode)
+    session.refresh(job)
+    assert job.status is JobStatus.cancelled
+    assert job.error == "사용자가 취소했습니다."
+    assert not paths.source(job.id).exists()
+    assert not paths.result(job.id).exists()
+
+
+def test_run_forever_survives_deleted_row(session, paths, settings, monkeypatch):
+    """틱이 ObjectDeletedError 를 삼키고 롤백한 뒤 다음 틱으로 계속 진행한다."""
+    from unittest import mock
+
+    from sqlalchemy.orm.exc import ObjectDeletedError
+
+    from app.worker import tick
+
+    _make_job(session, paths)
+
+    def boom(*a, **k):
+        raise ObjectDeletedError(None, "row deleted")
+
+    monkeypatch.setattr("app.worker.process_job", boom)
+    with mock.patch.object(session, "rollback", wraps=session.rollback) as rb:
+        tick(session, paths, settings)  # raise 되면 안 된다
+    assert rb.called
+
+
 def test_reset_stale_fails_stale_inflight_and_cleans_files(session, paths):
     from app.worker import reset_stale
 
