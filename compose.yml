@@ -1,0 +1,74 @@
+name: sevi
+
+services:
+  traefik:
+    image: traefik:v3.3
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+    ports:
+      - "80:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: sevi
+      POSTGRES_PASSWORD: ${SEVI_DB_PASSWORD:-sevi}
+      POSTGRES_DB: sevi
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sevi -d sevi"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    environment: &appenv
+      SEVI_DATABASE_URL: postgresql+psycopg://sevi:${SEVI_DB_PASSWORD:-sevi}@db:5432/sevi
+      SEVI_MEDIA_DIR: /media
+      SEVI_SESSION_SECRET: ${SEVI_SESSION_SECRET:-change-me-in-production}
+      SEVI_TARGET_BYTES: "49900000"
+      SEVI_MAX_UPLOAD_BYTES: "838860800"
+      LIBVA_DRIVER_NAME: iHD
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "video"
+      - "render"
+    volumes:
+      - media-data:/media
+    depends_on:
+      db:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.sevi.rule=PathPrefix(`/`)
+      - traefik.http.services.sevi.loadbalancer.server.port=8000
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["uv", "run", "--no-sync", "python", "-m", "app.worker"]
+    environment: *appenv
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "video"
+      - "render"
+    volumes:
+      - media-data:/media
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db-data:
+  media-data:
