@@ -39,7 +39,12 @@ export function App() {
       try {
         const j = await getJob(jobId);
         setJob(j);
-        if (j.status === "done" || j.status === "done_oversize" || j.status === "failed") {
+        if (
+          j.status === "done" ||
+          j.status === "done_oversize" ||
+          j.status === "failed" ||
+          j.status === "cancelled"
+        ) {
           stopPolling();
         }
       } catch (e) {
