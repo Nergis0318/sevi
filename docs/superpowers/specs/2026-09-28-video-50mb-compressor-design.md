@@ -23,7 +23,7 @@
 | 프런트 | React / Vite / TypeScript / Tailwind / shadcn/ui / TanStack Router / bun |
 | DB | PostgreSQL |
 | 작업 큐 | Postgres 백엔드 큐 (`FOR UPDATE SKIP LOCKED`) + 전용 워커 컨테이너 |
-| 배포 | Docker Compose + Traefik |
+| 배포 | Docker Compose (TLS·외부 도메인은 앞단 Caddy 소관) |
 | 업로드 한도 | 800MB |
 | 목표 크기 | 49,900,000 B (49.9 decimal MB) — `TARGET_BYTES` env로 변경 가능 |
 | 긴 영상 | 해상도 자동 다운스케일 |
@@ -95,7 +95,7 @@ ffmpeg -nostdin -y -hide_banner -nostats
 ## 4. 시스템 아키텍처
 
 ```
-클라이언트 → Traefik → backend (FastAPI + 빌드된 정적 프런트 서빙)
+클라이언트 → Caddy(사용자 운영, TLS 종료) → backend (FastAPI + 빌드된 정적 프런트 서빙)
                             │
                        PostgreSQL ── jobs
                             │
@@ -157,7 +157,7 @@ tick (1s 간격, 또는 NOTIFY):
 | `GET` | `/api/config` | `{max_upload_bytes, target_bytes, max_duration_s}` |
 | `GET` | `/api/health` | QSV 가용성 + DB 연결 |
 
-- `POST`는 `Content-Length`/Starlette 업로드 리밋 800MB, Traefik `maxRequestBodyBytes`도 동일
+- `POST`는 `Content-Length`/Starlette 업로드 리밋 800MB, 앞단 Caddy의 요청 본문 상한도 동일
 - 다운로드는 소유 세션만. 타인 세션은 404
 - 에러 응답: `{detail: string}`. 사용자 노출 메시지는 한국어
 
@@ -187,7 +187,8 @@ tick (1s 간격, 또는 NOTIFY):
 
 - 이미지: `python:3.13-slim` 기반 + `ffmpeg` + `intel-media-va-driver` (iHD)
   - 확인: ffmpeg 7.1.5-0+deb13u1, `vp9_qsv` 인코더 존재, VA-API 1.22, `iHD_drv_video.so` 로드 성공
-- 서비스: `traefik`, `db`(postgres:16), `backend`, `worker` (backend와 동일 이미지, CMD만 다름)
+- 서비스: `db`(postgres:16), `backend`, `worker` (backend와 동일 이미지, CMD만 다름)
+- 앞단 리버스 프록시는 **사용자 운영 Caddy** (compose 에 포함하지 않음). `backend`는 `127.0.0.1:8000`으로 HTTP 노출, TLS 종료·`X-Forwarded-For`/`-Proto` 설정은 Caddy가 담당
 - QSV 접근:
   ```yaml
   devices: ["/dev/dri:/dev/dri"]

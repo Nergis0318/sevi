@@ -1,17 +1,6 @@
 name: sevi
 
 services:
-  traefik:
-    image: traefik:v3.3
-    command:
-      - --providers.docker=true
-      - --providers.docker.exposedbydefault=false
-      - --entrypoints.web.address=:80
-    ports:
-      - "80:80"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-
   db:
     image: postgres:16
     environment:
@@ -44,13 +33,13 @@ services:
       - "${SEVI_GID_RENDER:-992}"
     volumes:
       - media-data:/media
+    # Caddy 가 같은 호스트에서 붙는 기본값. Caddy 가 도커 안에 있으면 이 바인딩 대신
+    # 공유 네트워크에 조인시키고 ports 를 지우세요.
+    ports:
+      - "127.0.0.1:8000:8000"
     depends_on:
       db:
         condition: service_healthy
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.sevi.rule=PathPrefix(`/`)
-      - traefik.http.services.sevi.loadbalancer.server.port=8000
 
   worker:
     build:
