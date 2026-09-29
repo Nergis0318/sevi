@@ -5,9 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, Upload
 from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 
-from app.api.deps import client_ip, get_limiter, get_settings_dep, require_session
+from app.api.deps import client_ip, get_ip_limiter, get_limiter, get_settings_dep, require_session
 from app.db import get_session
-from app.models import ACTIVE_STATES, Job, JobStatus, count_active, count_queued
+from app.models import Job, JobStatus, count_active, count_queued
 from app.paths import MediaPaths
 from app.ratelimit import RateLimitError, RateLimiter
 from app.schemas import JobCreated, JobStatusOut
@@ -49,11 +49,13 @@ async def create_job(
     session_id: str = Depends(require_session),
     settings: Settings = Depends(get_settings_dep),
     limiter: RateLimiter = Depends(get_limiter),
+    ip_limiter: RateLimiter = Depends(get_ip_limiter),
     session: Session = Depends(get_session),
 ) -> JobCreated:
-    key = f"{client_ip(request)}|{session_id}"
+    ip = client_ip(request)
     try:
-        limiter.check_upload(key)
+        limiter.check_upload(session_id)
+        ip_limiter.check_upload(ip)
     except RateLimitError as exc:
         raise HTTPException(
             status_code=429,
@@ -148,12 +150,14 @@ def delete_job(
     session: Session = Depends(get_session),
 ) -> Response:
     job = _get_owned(job_id, session_id, session)
-    if job.status in ACTIVE_STATES:
+    if job.status in (JobStatus.probing, JobStatus.encoding):
         job.status = JobStatus.cancelled
         job.error = "사용자가 취소했습니다."
         session.add(job)
         session.commit()
         return Response(status_code=202)
+    # queued 이거나 종료 상태 — 아무도 읽지 않으므로 행과 파일을 즉시 제거한다.
+    # 소프트 취소로 넘기면 파일이 24h 만료 스윕까지 남고 count_queued 상한이 뚫린다.
     _paths(settings).remove_job(job_id)
     session.delete(job)
     session.commit()

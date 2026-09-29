@@ -3,6 +3,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy.orm.exc import ObjectDeletedError, StaleDataError
 from sqlmodel import Session, select
 
 from app.converge import converge
@@ -19,6 +20,20 @@ log = logging.getLogger("sevi.worker")
 
 class JobCancelled(Exception):
     """진행 중 잡이 사용자 취소되었을 때 인코딩을 중단하는 신호."""
+
+
+def _refresh_or_cancel(session: Session, job: Job) -> None:
+    """최신 상태를 반영한다. 잡이 없어졌거나 취소됐으면 중단 신호를 던진다.
+
+    DELETE가 대기 중 잡을 즉시 제거하므로 행이 사라진 채 워커가 붙어 있을 수 있다 —
+    ObjectDeletedError 를 그대로 두면 이후 커밋이 깨진다.
+    """
+    try:
+        session.refresh(job)
+    except (ObjectDeletedError, StaleDataError) as exc:
+        raise JobCancelled() from exc
+    if job.status is JobStatus.cancelled:
+        raise JobCancelled()
 
 
 def sweep(session: Session, paths: MediaPaths, *, now: datetime | None = None) -> int:
@@ -102,9 +117,7 @@ def process_job(
         dst = paths.result(job.id)
 
         def _run(kbps: int) -> int:
-            session.refresh(job)
-            if job.status is JobStatus.cancelled:
-                raise JobCancelled()
+            _refresh_or_cancel(session, job)
             job.status = JobStatus.encoding
             job.attempt += 1
             job.progress = 0.0
@@ -151,13 +164,17 @@ def process_job(
         job.status = JobStatus.failed
         job.error = "인코딩 중 오류가 발생했습니다."
     finally:
-        job.source_path = None
-        if src.exists():
-            src.unlink(missing_ok=True)
+        src.unlink(missing_ok=True)
         if job.status is JobStatus.cancelled:
             paths.result(job.id).unlink(missing_ok=True)
-        session.add(job)
-        session.commit()
+        job.source_path = None
+        try:
+            session.add(job)
+            session.commit()
+        except (ObjectDeletedError, StaleDataError):
+            # DELETE가 이미 행을 지운 경우 — 워커는 살아남아야 한다.
+            session.rollback()
+            paths.result(job.id).unlink(missing_ok=True)
 
 
 def _make_progress_cb(session: Session, job: Job):
@@ -168,9 +185,7 @@ def _make_progress_cb(session: Session, job: Job):
         if now - last["t"] < 1.0 and fraction < 1.0:
             return
         last["t"] = now
-        session.refresh(job)
-        if job.status is JobStatus.cancelled:
-            raise JobCancelled()
+        _refresh_or_cancel(session, job)
         job.progress = max(0.0, min(1.0, fraction))
         session.add(job)
         session.commit()

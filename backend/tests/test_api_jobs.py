@@ -111,34 +111,6 @@ def test_empty_upload_rejected(client):
     assert r.status_code == 400
 
 
-def test_delete_in_flight_marks_cancelled_not_deleted(client, settings):
-    job_id = _upload(client).json()["id"]
-    paths = MediaPaths(settings.media_dir)
-    r = client.delete(f"/api/jobs/{job_id}")
-    assert r.status_code == 202
-    with Session(client.engine) as s:
-        job = s.get(Job, UUID(job_id))
-        assert job is not None
-        assert job.status is JobStatus.cancelled
-        assert job.error == "사용자가 취소했습니다."
-    assert paths.source(UUID(job_id)).exists()
-
-
-def test_delete_terminal_job_removes_row(client, settings):
-    job_id = _upload(client).json()["id"]
-    with Session(client.engine) as s:
-        job = s.get(Job, UUID(job_id))
-        job.status = JobStatus.done
-        s.add(job)
-        s.commit()
-    paths = MediaPaths(settings.media_dir)
-    r = client.delete(f"/api/jobs/{job_id}")
-    assert r.status_code == 204
-    assert not paths.job_dir(UUID(job_id)).exists()
-    with Session(client.engine) as s:
-        assert s.get(Job, UUID(job_id)) is None
-
-
 def test_rate_limit_returns_429(tmp_path):
     settings = Settings(
         database_url="sqlite://",
@@ -217,13 +189,15 @@ def test_active_slot_blocks_second_upload(settings):
         assert "진행 중" in second.json()["detail"]
 
 
-def test_rate_limit_keyed_on_ip_and_session(tmp_path):
-    """리밋 키는 IP+세션 복합 — 쿠키 폐기/세션 재사용으로 우회 불가."""
+def test_ip_rate_limit_survives_cookie_discard(tmp_path):
+    """쿠키를 매번 버려도 IP 리밋은 남는다 — 세션 리밋만으로는 무제한 업로드가 된다."""
     settings = Settings(
         database_url="sqlite://",
         media_dir=tmp_path / "media",
         session_secret="test-secret",
-        rate_limit_per_hour=1,
+        rate_limit_per_hour=100,
+        rate_limit_per_hour_per_ip=1,
+        max_queued_jobs=100,
     )
     engine = create_engine(
         settings.database_url,
@@ -239,26 +213,129 @@ def test_rate_limit_keyed_on_ip_and_session(tmp_path):
     app = create_app(settings)
     app.dependency_overrides[get_session] = _override
     with TestClient(app) as c:
-        r1 = c.post(
-            "/api/jobs",
-            files={"file": ("a.mp4", io.BytesIO(b"x"), "video/mp4")},
-            headers={"X-Forwarded-For": "1.1.1.1"},
-        )
-        assert r1.status_code == 201
-        c.delete(f"/api/jobs/{r1.json()['id']}")  # 활성 슬롯 해제 — 리밋만 검사
-        r2 = c.post(
-            "/api/jobs",
-            files={"file": ("b.mp4", io.BytesIO(b"x"), "video/mp4")},
-            headers={"X-Forwarded-For": "2.2.2.2"},
-        )
-        assert r2.status_code == 201  # 동일 세션, 다른 IP → 별도 버킷
-        c.delete(f"/api/jobs/{r2.json()['id']}")
-        r3 = c.post(
-            "/api/jobs",
-            files={"file": ("c.mp4", io.BytesIO(b"x"), "video/mp4")},
-            headers={"X-Forwarded-For": "1.1.1.1"},
-        )
-        assert r3.status_code == 429  # 1.1.1.1|sid 버킷 소진
+        assert c.post("/api/jobs", files={"file": ("a.mp4", io.BytesIO(b"x"), "video/mp4")}).status_code == 201
+        c.cookies.clear()  # 새 세션을 받지만 IP 는 같다
+        r2 = c.post("/api/jobs", files={"file": ("b.mp4", io.BytesIO(b"x"), "video/mp4")})
+        assert r2.status_code == 429
+        assert "Retry-After" in r2.headers
+
+
+def test_session_rate_limit_still_applies(tmp_path):
+    """세션 리밋은 별도로 유지된다 — 공유 NAT 아래서도 한 사람이 대량 업로드 못 함."""
+    settings = Settings(
+        database_url="sqlite://",
+        media_dir=tmp_path / "media",
+        session_secret="test-secret",
+        rate_limit_per_hour=1,
+        rate_limit_per_hour_per_ip=100,
+        max_queued_jobs=100,
+    )
+    engine = create_engine(
+        settings.database_url,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+
+    def _override():
+        with Session(engine) as s:
+            yield s
+
+    app = create_app(settings)
+    app.dependency_overrides[get_session] = _override
+    with TestClient(app) as c:
+        first = c.post("/api/jobs", files={"file": ("a.mp4", io.BytesIO(b"x"), "video/mp4")})
+        assert first.status_code == 201
+        c.delete(f"/api/jobs/{first.json()['id']}")  # 활성 슬롯 해제 — 세션 리밋만 검사
+        assert c.post("/api/jobs", files={"file": ("b.mp4", io.BytesIO(b"x"), "video/mp4")}).status_code == 429
+
+
+def test_delete_queued_hard_deletes(tmp_path):
+    """queued 는 아직 워커가 붙지 않아 행과 파일을 즉시 제거한다.
+
+    소프트 취소로 넘기면 파일이 만료 스윕까지 남고 count_queued 상한이 뚫린다.
+    """
+    settings = Settings(database_url="sqlite://", media_dir=tmp_path / "media", session_secret="t")
+    engine = create_engine(
+        settings.database_url,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+
+    def _override():
+        with Session(engine) as s:
+            yield s
+
+    app = create_app(settings)
+    app.dependency_overrides[get_session] = _override
+    with TestClient(app) as c:
+        job_id = c.post("/api/jobs", files={"file": ("a.mp4", io.BytesIO(b"x"), "video/mp4")}).json()["id"]
+        paths = MediaPaths(settings.media_dir)
+        assert paths.source(UUID(job_id)).is_file()
+        r = c.delete(f"/api/jobs/{job_id}")
+        assert r.status_code == 204
+        assert not paths.job_dir(UUID(job_id)).exists()
+
+
+def test_delete_in_flight_marks_cancelled_not_deleted(tmp_path):
+    """probing/encoding 은 워커가 붙어 있으므로 소프트 취소하고 행을 남긴다."""
+    settings = Settings(database_url="sqlite://", media_dir=tmp_path / "media", session_secret="t")
+    engine = create_engine(
+        settings.database_url,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+
+    def _override():
+        with Session(engine) as s:
+            yield s
+
+    app = create_app(settings)
+    app.dependency_overrides[get_session] = _override
+    with TestClient(app) as c:
+        job_id = c.post("/api/jobs", files={"file": ("a.mp4", io.BytesIO(b"x"), "video/mp4")}).json()["id"]
+        with Session(engine) as s:
+            job = s.get(Job, UUID(job_id))
+            job.status = JobStatus.encoding
+            s.add(job)
+            s.commit()
+        paths = MediaPaths(settings.media_dir)
+        r = c.delete(f"/api/jobs/{job_id}")
+        assert r.status_code == 202
+        with Session(engine) as s:
+            job = s.get(Job, UUID(job_id))
+            assert job is not None and job.status is JobStatus.cancelled
+        assert paths.source(UUID(job_id)).exists()  # 워커가 정리한다
+
+
+def test_delete_terminal_job_removes_row(tmp_path):
+    settings = Settings(database_url="sqlite://", media_dir=tmp_path / "media", session_secret="t")
+    engine = create_engine(
+        settings.database_url,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+
+    def _override():
+        with Session(engine) as s:
+            yield s
+
+    app = create_app(settings)
+    app.dependency_overrides[get_session] = _override
+    with TestClient(app) as c:
+        job_id = c.post("/api/jobs", files={"file": ("a.mp4", io.BytesIO(b"x"), "video/mp4")}).json()["id"]
+        with Session(engine) as s:
+            job = s.get(Job, UUID(job_id))
+            job.status = JobStatus.done
+            s.add(job)
+            s.commit()
+        r = c.delete(f"/api/jobs/{job_id}")
+        assert r.status_code == 204
+        with Session(engine) as s:
+            assert s.get(Job, UUID(job_id)) is None
 
 
 def test_global_queue_cap(tmp_path):
