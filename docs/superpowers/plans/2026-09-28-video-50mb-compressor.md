@@ -281,8 +281,10 @@ Expected: PASS (골격이 이미 있으므로). 실패하면 import 경로 수�
 
 - [ ] **Step 4: 커밋**
 
+`uv.lock`를 반드시 포함한다 — Task 11의 Dockerfile이 `COPY backend/uv.lock`을 참조한다.
+
 ```bash
-git add backend/pyproject.toml backend/app backend/tests
+git add backend/pyproject.toml backend/uv.lock backend/app backend/tests
 git commit -m "feat: scaffold FastAPI backend with settings, db, health endpoint"
 ```
 
@@ -319,8 +321,8 @@ def test_pick_height_keeps_source_when_bpp_satisfied():
 
 
 def test_pick_height_downscales_when_bpp_low():
-    # 1080p에 500 kbps -> bpp = 5e5/(1920*1080*30) = 0.008 -> 사다리 하단
-    assert pick_height(1920, 1080, 30.0, 500_000) == 240
+    # 1080p에 500 kbps -> 360p(640x360)에서 bpp = 5e5/(640*360*30) = 0.072 >= 0.06
+    assert pick_height(1920, 1080, 30.0, 500_000) == 360
 
 
 def test_pick_height_never_exceeds_source():
@@ -359,10 +361,23 @@ def test_plan_respects_min_video_kbps():
     assert plan.video_kbps >= 80
 
 
-def test_plan_audio_capped_at_12_percent():
-    # 아주 짧은 영상이면 오디오가 12%를 넘지 않음
-    plan = plan_encode(duration_s=5.0, fps=30.0, src_width=640, src_height=360, has_audio=True, target_bytes=TARGET)
-    budget_bps = TARGET * 8 / 5.0
+def test_plan_audio_cap_is_binding():
+    # 800s: budget_bps = 49.9e6*8/800 = 499000, capped = int(499000*0.12/1000) = 59
+    # 기본값 96 이 아니라 12% 상한이 실제로 구속되는 구간이다.
+    plan = plan_encode(duration_s=800.0, fps=30.0, src_width=640, src_height=360, has_audio=True, target_bytes=TARGET)
+    assert plan.audio_kbps == 59
+    assert plan.audio_kbps < 96
+    budget_bps = TARGET * 8 / 800.0
+    assert plan.audio_kbps * 1000 <= budget_bps * 0.12
+
+
+def test_plan_audio_cap_wins_over_floor():
+    # 1200s: budget_bps = 332666, capped = 39 < 하한 48
+    # 상한이 하한보다 우선한다 — 아니면 오디오가 예산을 먹어 긴 영상이 항상 초과된다.
+    plan = plan_encode(duration_s=1200.0, fps=30.0, src_width=640, src_height=360, has_audio=True, target_bytes=TARGET)
+    assert plan.audio_kbps == 39
+    assert plan.audio_kbps < 48
+    budget_bps = TARGET * 8 / 1200.0
     assert plan.audio_kbps * 1000 <= budget_bps * 0.12
 
 
@@ -432,8 +447,10 @@ def plan_encode(
 
     audio_kbps = 0
     if has_audio:
-        audio_kbps = int(min(AUDIO_DEFAULT_KBPS, budget_bps * AUDIO_SHARE_CAP / 1000))
-        audio_kbps = max(audio_kbps, AUDIO_MIN_KBPS)
+        capped = int(budget_bps * AUDIO_SHARE_CAP / 1000)
+        audio_kbps = min(AUDIO_DEFAULT_KBPS, capped)
+        if capped >= AUDIO_MIN_KBPS:
+            audio_kbps = max(audio_kbps, AUDIO_MIN_KBPS)
 
     video_bps = budget_bps * CONTAINER_MARGIN - audio_kbps * 1000
     video_kbps = max(int(video_bps / 1000), min_video_kbps)
@@ -503,7 +520,7 @@ def test_scales_down_when_oversize():
 
     def encode(kbps: int) -> int:
         calls.append(kbps)
-        return int(kbps / 1000 * TARGET)  # 항상 10배 초과
+        return TARGET * 10  # 항상 10배 초과 — 결코 수렴하지 않음
 
     res = converge(target_bytes=TARGET, initial_kbps=1000, encode=encode, max_attempts=3)
     assert res.attempts == 3
@@ -881,6 +898,7 @@ git commit -m "feat: ffprobe validation and metadata extraction"
   - `MediaPaths(root: Path)` with `job_dir(job_id: UUID) -> Path`, `source(job_id) -> Path`, `result(job_id) -> Path`, `prepare(job_id) -> Path`, `remove_job(job_id) -> None`
   - `JobStatus` str-enum: `queued`, `probing`, `encoding`, `done`, `done_oversize`, `failed`, `cancelled`
   - `Job` SQLModel table `jobs` with columns listed in spec §4.1
+  - `count_active(session: Session, session_id: str) -> int` — `status IN (queued, probing, encoding)`인 잡 수. **세션 활성 슬롯의 유일한 진실 원천** (워커는 별도 프로세스라 인메모리 슬롯을 해제할 수 없다)
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
@@ -969,6 +987,27 @@ def test_job_status_values():
     assert JobStatus.queued.value == "queued"
     assert JobStatus.done_oversize.value == "done_oversize"
     assert JobStatus.cancelled.value == "cancelled"
+
+
+def test_count_active_counts_only_live_states():
+    from datetime import timedelta
+
+    from app.models import count_active
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    SQLModel.metadata.create_all(engine)
+    now = datetime.now(timezone.utc)
+    with Session(engine) as s:
+        for st in (JobStatus.queued, JobStatus.probing, JobStatus.encoding,
+                   JobStatus.done, JobStatus.failed, JobStatus.cancelled, JobStatus.done_oversize):
+            s.add(Job(session_id="sid", status=st, created_at=now,
+                      expires_at=now + timedelta(hours=24)))
+        s.add(Job(session_id="other", status=JobStatus.queued, created_at=now,
+                  expires_at=now + timedelta(hours=24)))
+        s.commit()
+        assert count_active(s, "sid") == 3
+        assert count_active(s, "other") == 1
+        assert count_active(s, "nobody") == 0
 ```
 
 - [ ] **Step 2: 실패 확인**
@@ -1015,7 +1054,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlmodel import Field, SQLModel
+from sqlmodel import Field, Session, SQLModel
 
 
 class JobStatus(str, enum.Enum):
@@ -1047,6 +1086,21 @@ class Job(SQLModel, table=True):
     error: str | None = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime
+
+
+ACTIVE_STATES = (JobStatus.queued, JobStatus.probing, JobStatus.encoding)
+
+
+def count_active(session: Session, session_id: str) -> int:
+    """세션의 진행 중 잡 수. 활성 슬롯의 유일한 진실 원천."""
+    from sqlmodel import func, select
+
+    stmt = (
+        select(func.count())
+        .select_from(Job)
+        .where(Job.session_id == session_id, Job.status.in_(ACTIVE_STATES))
+    )
+    return int(session.exec(stmt).one())
 ```
 
 > **검증 메모:** `JobStatus(str, enum.Enum)`을 기본 `Field`에 두면 SQLAlchemy `Enum` 타입이 매핑되어 Python에서 `JobStatus` 인스턴스로 되돌아온다 (`job.status is JobStatus.queued` 성립). `sa_type=String`으로 바꾸면 TEXT로 저장되지만 읽을 때 `str`이 되므로 identity 검사가 깨진다 — **기본 Enum 매핑 유지**. Postgres에서 `create_all`이 `CREATE TYPE`을 발행한다. 나중에 enum 값을 추가할 때만 `ALTER TYPE` 마이그레이션이 필요하다.
@@ -1055,7 +1109,7 @@ class Job(SQLModel, table=True):
 - [ ] **Step 4: 통과 확인**
 
 Run: `cd backend && uv run pytest tests/test_paths.py tests/test_models.py -v`
-Expected: PASS 7 tests
+Expected: PASS 8 tests
 
 - [ ] **Step 5: 커밋**
 
@@ -1079,7 +1133,8 @@ git commit -m "feat: media path layout and job model"
   - `issue(secret: str) -> tuple[str, str]` → `(session_id, cookie_value)`
   - `verify(secret: str, cookie_value: str) -> str | None`
   - `class RateLimitError(Exception)` with `retry_after_s: int`
-  - `RateLimiter(per_hour: int, clock: Callable[[], float] = time.monotonic)` with `check_upload(key: str) -> None`, `check_active(key: str) -> None`, `release_active(key: str) -> None`
+  - `RateLimiter(per_hour: int, clock: Callable[[], float] = time.monotonic)` with `check_upload(key: str) -> None`
+  - **활동 슬롯은 여기서 다루지 않는다** — 워커가 별도 프로세스라 인메모리 슬롯을 해제할 수 없다. `count_active`는 Task 5 `app/models.py`가 생산한다
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
@@ -1173,22 +1228,6 @@ def test_keys_are_independent():
     rl = RateLimiter(per_hour=1, clock=clock)
     rl.check_upload("a")
     rl.check_upload("b")  # 다른 키는 영향 없음
-
-
-def test_active_slot():
-    clock = FakeClock()
-    rl = RateLimiter(per_hour=10, clock=clock)
-    rl.check_active("k")
-    with pytest.raises(RateLimitError):
-        rl.check_active("k")
-    rl.release_active("k")
-    rl.check_active("k")  # 해제 후 재사용
-
-
-def test_release_is_idempotent():
-    rl = RateLimiter(per_hour=10)
-    rl.release_active("k")
-    rl.release_active("k")
 ```
 
 - [ ] **Step 2: 실패 확인**
@@ -1223,7 +1262,12 @@ def verify(secret: str, cookie_value: str) -> str | None:
     session_id, _, sig = cookie_value.rpartition(".")
     if not session_id or not sig:
         return None
-    if not hmac.compare_digest(sig, _sign(secret, session_id)):
+    expected = _sign(secret, session_id)
+    try:
+        matched = hmac.compare_digest(sig.encode("ascii"), expected.encode("ascii"))
+    except UnicodeEncodeError:
+        return None  # 비ASCII 위조값 — compare_digest 는 str 에 ASCII 만 허용
+    if not matched:
         return None
     return session_id
 ```
@@ -1244,6 +1288,8 @@ class RateLimitError(Exception):
 
 
 # ponytail: 인메모리 리밋 — backend 단일 프로세스 전제. 스케일 아웃 시 Redis로 교체
+# 활동 슬롯은 여기서 다루지 않는다 — 워커가 별도 프로세스라 해제할 수 없으므로
+# DB 의존하는 app.models.count_active 가 유일한 진실 원천이다.
 class RateLimiter:
     def __init__(
         self,
@@ -1255,12 +1301,12 @@ class RateLimiter:
         self._window = 3600.0
         self._clock = clock
         self._uploads: dict[str, deque[float]] = {}
-        self._active: set[str] = set()
         self._lock = threading.Lock()
 
     def check_upload(self, key: str) -> None:
         now = self._clock()
         with self._lock:
+            self._evict(now)
             q = self._uploads.setdefault(key, deque())
             while q and now - q[0] > self._window:
                 q.popleft()
@@ -1273,24 +1319,21 @@ class RateLimiter:
                 )
             q.append(now)
 
-    def check_active(self, key: str) -> None:
-        with self._lock:
-            if key in self._active:
-                raise RateLimitError(
-                    "이미 진행 중인 작업이 있습니다. 완료 후 다시 시도해 주세요.",
-                    retry_after_s=0,
-                )
-            self._active.add(key)
-
-    def release_active(self, key: str) -> None:
-        with self._lock:
-            self._active.discard(key)
+    def _evict(self, now: float) -> None:
+        """창을 지난 키와 빈 deque 를 제거 — 세션 무한 생성에 따른 메모리 증식 방지."""
+        stale = [
+            k
+            for k, q in self._uploads.items()
+            if not q or now - q[-1] > self._window
+        ]
+        for k in stale:
+            del self._uploads[k]
 ```
 
 - [ ] **Step 4: 통과 확인**
 
 Run: `cd backend && uv run pytest tests/test_session.py tests/test_ratelimit.py -v`
-Expected: PASS 13 tests
+Expected: PASS 11 tests
 
 - [ ] **Step 5: 커밋**
 
@@ -1339,7 +1382,7 @@ def src_av(tmp_path_factory):
             "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=30:duration=4",
             "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
-            "-shortest", "-y", str(out),
+            "-shortest", "-f", "mp4", "-y", str(out),
         ],
         check=True,
     )
@@ -1354,7 +1397,7 @@ def src_video_only(tmp_path_factory):
         [
             "ffmpeg", "-hide_banner", "-loglevel", "error",
             "-f", "lavfi", "-i", "testsrc=size=640x360:rate=25:duration=3",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", "-y", str(out),
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", "-f", "mp4", "-y", str(out),
         ],
         check=True,
     )
@@ -1493,9 +1536,6 @@ def encode_once(
     ffmpeg_path: str = "ffmpeg",
     on_progress: Callable[[float], None] | None = None,
 ) -> int:
-    if not src.is_file():
-        raise EncodeError(f"입력 파일이 없습니다: {src.name}")
-
     dst.parent.mkdir(parents=True, exist_ok=True)
     cmd = build_cmd(ffmpeg_path=ffmpeg_path, src=src, dst=dst, plan=plan, video_kbps=video_kbps)
 
@@ -1618,15 +1658,13 @@ from app.ratelimit import RateLimiter
 from app.session import SESSION_COOKIE, issue, verify
 from app.settings import Settings
 
-_limiter = RateLimiter(per_hour=5)
-
 
 def get_settings_dep(request: Request) -> Settings:
     return request.app.state.settings
 
 
-def get_limiter() -> RateLimiter:
-    return _limiter
+def get_limiter(request: Request) -> RateLimiter:
+    return request.app.state.limiter
 
 
 def require_session(
@@ -1664,7 +1702,7 @@ from sqlmodel import Session, select
 
 from app.api.deps import get_limiter, get_settings_dep, require_session
 from app.db import get_session
-from app.models import Job, JobStatus
+from app.models import Job, JobStatus, count_active
 from app.paths import MediaPaths
 from app.ratelimit import RateLimitError, RateLimiter
 from app.schemas import JobCreated, JobStatusOut
@@ -1710,13 +1748,19 @@ async def create_job(
     key = session_id
     try:
         limiter.check_upload(key)
-        limiter.check_active(key)
     except RateLimitError as exc:
         raise HTTPException(
             status_code=429,
             detail=str(exc),
             headers={"Retry-After": str(exc.retry_after_s or 60)},
         ) from exc
+
+    if count_active(session, session_id) >= 1:
+        raise HTTPException(
+            status_code=429,
+            detail="이미 진행 중인 작업이 있습니다. 완료 후 다시 시도해 주세요.",
+            headers={"Retry-After": "30"},
+        )
 
     job_id = uuid.uuid4()
     paths = _paths(settings)
@@ -1738,7 +1782,6 @@ async def create_job(
             raise HTTPException(status_code=400, detail="빈 파일은 업로드할 수 없습니다.")
     except BaseException:
         paths.remove_job(job_id)
-        limiter.release_active(key)
         raise
 
     now = datetime.now(timezone.utc)
@@ -1828,6 +1871,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from app.ratelimit import RateLimiter
 from app.settings import Settings, get_settings
 
 
@@ -1835,6 +1879,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     app = FastAPI(title="sevi", version="0.1.0")
     app.state.settings = settings
+    app.state.limiter = RateLimiter(per_hour=settings.rate_limit_per_hour)
 
     from app.api.config import router as config_router
     from app.api.health import router as health_router
@@ -1859,9 +1904,11 @@ app = create_app()
 
 ```python
 import io
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.db import get_session
@@ -1884,7 +1931,9 @@ def settings(tmp_path) -> Settings:
 @pytest.fixture
 def client(settings):
     engine = create_engine(
-        settings.database_url, connect_args={"check_same_thread": False}
+        settings.database_url,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
     SQLModel.metadata.create_all(engine)
 
@@ -1944,7 +1993,11 @@ def test_foreign_session_gets_404(client):
 
 
 def test_oversize_upload_rejected(settings):
-    engine = create_engine(settings.database_url, connect_args={"check_same_thread": False})
+    engine = create_engine(
+        settings.database_url,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     SQLModel.metadata.create_all(engine)
 
     def _override():
@@ -1967,8 +2020,6 @@ def test_empty_upload_rejected(client):
 def test_delete_removes_job_and_files(client, settings):
     job_id = _upload(client).json()["id"]
     paths = MediaPaths(settings.media_dir)
-    from uuid import UUID
-
     assert paths.source(UUID(job_id)).is_file()
     r = client.delete(f"/api/jobs/{job_id}")
     assert r.status_code == 204
@@ -1976,9 +2027,14 @@ def test_delete_removes_job_and_files(client, settings):
     assert client.get(f"/api/jobs/{job_id}").status_code == 404
 
 
-def test_rate_limit_returns_429(settings, monkeypatch):
-    settings = settings.model_copy(update={"rate_limit_per_hour": 1})
-    engine = create_engine(settings.database_url, connect_args={"check_same_thread": False})
+def test_rate_limit_returns_429(tmp_path):
+    settings = Settings(
+        database_url="sqlite://",
+        media_dir=tmp_path / "media",
+        session_secret="test-secret",
+        rate_limit_per_hour=1,
+    )
+    engine = create_engine(settings.database_url, connect_args={"check_same_thread": False}, poolclass=StaticPool)
     SQLModel.metadata.create_all(engine)
 
     def _override():
@@ -1988,10 +2044,33 @@ def test_rate_limit_returns_429(settings, monkeypatch):
     app = create_app(settings)
     app.dependency_overrides[get_session] = _override
     with TestClient(app) as c:
-        import app.api.deps as deps
-        monkeypatch.setattr(deps, "_limiter", deps.RateLimiter(per_hour=1))
         assert c.post("/api/jobs", files={"file": ("a.mp4", io.BytesIO(b"x"), "video/mp4")}).status_code == 201
-        assert c.post("/api/jobs", files={"file": ("b.mp4", io.BytesIO(b"x"), "video/mp4")}).status_code == 429
+        r = c.post("/api/jobs", files={"file": ("b.mp4", io.BytesIO(b"x"), "video/mp4")})
+        assert r.status_code == 429
+        assert "Retry-After" in r.headers
+
+
+def test_active_slot_blocks_second_upload(settings):
+    """진행 중 잡이 있으면 같은 세션에서 추가 업로드가 거부된다 (DB 기반)."""
+    engine = create_engine(
+        settings.database_url,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+
+    def _override():
+        with Session(engine) as s:
+            yield s
+
+    app = create_app(settings)
+    app.dependency_overrides[get_session] = _override
+    with TestClient(app) as c:
+        first = c.post("/api/jobs", files={"file": ("a.mp4", io.BytesIO(b"x"), "video/mp4")})
+        assert first.status_code == 201
+        second = c.post("/api/jobs", files={"file": ("b.mp4", io.BytesIO(b"x"), "video/mp4")})
+        assert second.status_code == 429
+        assert "진행 중" in second.json()["detail"]
 ```
 
 - [ ] **Step 5: 실패 확인 후 전 테스트 실행**
@@ -2788,7 +2867,12 @@ export function App() {
       try {
         const j = await getJob(jobId);
         setJob(j);
-        if (j.status === "done" || j.status === "done_oversize" || j.status === "failed") {
+        if (
+          j.status === "done" ||
+          j.status === "done_oversize" ||
+          j.status === "failed" ||
+          j.status === "cancelled"
+        ) {
           stopPolling();
         }
       } catch (e) {
@@ -2967,7 +3051,7 @@ services:
     image: postgres:16
     environment:
       POSTGRES_USER: sevi
-      POSTGRES_PASSWORD: ${SEVI_DB_PASSWORD:-sevi}
+      POSTGRES_PASSWORD: ${SEVI_DB_PASSWORD:?SEVI_DB_PASSWORD 미설정 — `cp .env.example .env` 후 값을 바꾸세요}
       POSTGRES_DB: sevi
     volumes:
       - db-data:/var/lib/postgresql/data
@@ -2982,9 +3066,9 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     environment: &appenv
-      SEVI_DATABASE_URL: postgresql+psycopg://sevi:${SEVI_DB_PASSWORD:-sevi}@db:5432/sevi
+      SEVI_DATABASE_URL: postgresql+psycopg://sevi:${SEVI_DB_PASSWORD:?SEVI_DB_PASSWORD 미설정}@db:5432/sevi
       SEVI_MEDIA_DIR: /media
-      SEVI_SESSION_SECRET: ${SEVI_SESSION_SECRET:-change-me-in-production}
+      SEVI_SESSION_SECRET: ${SEVI_SESSION_SECRET:?SEVI_SESSION_SECRET 미설정 — 긴 임의 문자열로 바꾸세요}
       SEVI_TARGET_BYTES: "49900000"
       SEVI_MAX_UPLOAD_BYTES: "838860800"
       LIBVA_DRIVER_NAME: iHD
@@ -3113,7 +3197,8 @@ git commit -m "feat: docker compose deployment with QSV passthrough"
 - `MediaPaths.job_dir/source/result/prepare/remove_job` — T5 정의, T8/T9 사용 일치
 - `encode_once(src, dst, plan, video_kbps, ffmpeg_path, on_progress)` — T7 정의, T9 `_run` 호출과 일치
 - `issue(secret) -> (sid, cookie)`, `verify(secret, value) -> sid | None` — T6 정의, T8 `require_session`과 일치
-- `RateLimiter.check_upload/check_active/release_active` — T6 정의, T8 사용 일치
+- `RateLimiter.check_upload` — T6 정의, T8 사용 일치. `check_active`/`release_active`는 **의도적으로 제외** (워커 별도 프로세스라 인메모리 슬롯 해제 불가). 활성 슬롯은 `models.count_active` DB 질의
+- `count_active(session, session_id) -> int` — T5 정의, T8 `create_job`에서 소비. `ACTIVE_STATES` = queued/probing/encoding
 - `JobStatus` 멤버 `queued/probing/encoding/done/done_oversize/failed/cancelled` — T5 정의, T8/T9/T10 라벨과 일치
 - `worker.py`는 `probe`/`plan_encode`/`converge`/`encode_once`를 **모듈 레벨 직접 import** — T9의 `monkeypatch.setattr("app.worker.probe", ...)` 타깃과 일치. 모듈 별칭(`_probe.probe`)을 쓰면 패치가 안 먹으므로 금지
 - `created_at` 기본값은 `datetime.now(timezone.utc)` — `datetime.UTC`는 `from datetime import datetime`와 함께 쓸 수 없음
