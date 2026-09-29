@@ -12,6 +12,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="sevi", version="0.1.0")
     app.state.settings = settings
     app.state.limiter = RateLimiter(per_hour=settings.rate_limit_per_hour)
+    app.state.ip_limiter = RateLimiter(per_hour=settings.rate_limit_per_hour_per_ip)
 
     from app.api.config import router as config_router
     from app.api.health import router as health_router

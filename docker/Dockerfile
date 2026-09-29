@@ -33,6 +33,8 @@ COPY backend/app ./app
 COPY --from=frontend /build/dist ./app/static
 
 EXPOSE 8000
-# --proxy-headers / --forwarded-allow-ips 필수: Traefik 뒤에서 X-Forwarded-For(클라이언트 IP,
-# IP+세션 리밋 키)와 X-Forwarded-Proto(https 감지 → Secure 쿠키)를 반영하려면 없으면 안 된다
-CMD ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]
+# --forwarded-allow-ips="" : uvicorn 의 프록시 헤더 재작성을 끈다. uvicorn 은 X-Forwarded-For 의
+#   **왼쪽 끝**(클라이언트가 지정 가능)을 request.client 에 쓰므로 리밋 키가 위조된다.
+#   실제 IP 는 app/api/deps.py 의 client_ip 가 오른쪽부터 신뢰할 수 없는 첫 홉을 택해
+#   직접 파싱한다(Traefik 은 실제 IP 를 끝에 덧붙인다). Secure 플래그도 deps.is_https 가 직접 읽는다.
+CMD ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips="]
