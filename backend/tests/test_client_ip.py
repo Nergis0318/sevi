@@ -20,7 +20,7 @@ def test_untrusted_peer_ignores_forwarded_header():
 
 
 def test_trusted_peer_uses_rightmost_untrusted_hop():
-    """Traefik 은 실제 IP 를 끝에 덧붙인다 — 왼쪽 끝(uvicorn 기본)은 클라이언트가 지정한 값."""
+    """프록시(Caddy/Traefik)는 실제 IP를 끝에 둔다 — 왼쪽 끝(uvicorn 기본)은 클라이언트가 지정한 값."""
     req = _req(
         peer="172.18.0.4",
         headers={"x-forwarded-for": "22.22.22.22, 11.11.11.11"},
@@ -28,7 +28,7 @@ def test_trusted_peer_uses_rightmost_untrusted_hop():
     assert client_ip(req) == "11.11.11.11"
 
 
-def test_trusted_peer_skips_private_hops():
+def test_trusted_peer_uses_last_hop_in_chain():
     req = _req(
         peer="172.18.0.4",
         headers={"x-forwarded-for": "22.22.22.22, 10.0.0.1, 11.11.11.11"},
@@ -36,9 +36,16 @@ def test_trusted_peer_skips_private_hops():
     assert client_ip(req) == "11.11.11.11"
 
 
-def test_trusted_peer_all_private_falls_back_to_peer():
-    req = _req(peer="172.18.0.4", headers={"x-forwarded-for": "10.0.0.1"})
-    assert client_ip(req) == "172.18.0.4"
+def test_private_client_keeps_its_own_ip():
+    """LAN/VPN 클라이언트(사설 IP)는 자기 IP를 유지한다 — 피어로 뭉개면 전원이 한 버킷."""
+    req = _req(peer="127.0.0.1", headers={"x-forwarded-for": "10.0.0.1"})
+    assert client_ip(req) == "10.0.0.1"
+
+
+def test_appended_hop_wins_over_client_supplied_prefix():
+    """프록시가 끝에 실제 IP를 붙이면 앞의 위조값은 못 쓴다 — 사설이어도 끝이 진실이다."""
+    req = _req(peer="127.0.0.1", headers={"x-forwarded-for": "22.22.22.22, 10.0.0.1"})
+    assert client_ip(req) == "10.0.0.1"
 
 
 def test_no_header_falls_back_to_peer():
