@@ -8,3 +8,6 @@ frontend/dist/
 *.webm
 *.mp4
 .DS_Store
+
+# brainstorming companion mockups
+.superpowers/
