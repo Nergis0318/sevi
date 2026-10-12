@@ -10,49 +10,67 @@ const LABEL: Record<JobStatusOut["status"], string> = {
   cancelled: "취소됨",
 };
 
+const RUNNING: JobStatusOut["status"][] = ["queued", "probing", "encoding"];
+
 function mb(bytes: number | null): string {
   if (bytes == null) return "-";
   return `${(bytes / 1_000_000).toFixed(1)}MB`;
 }
 
-export function JobStatus({ job }: { job: JobStatusOut }) {
+export function JobStatus({
+  job,
+  onRemove,
+}: {
+  job: JobStatusOut;
+  onRemove: () => void;
+}) {
   const pct = Math.round(job.progress * 100);
   const saved =
     job.source_bytes && job.result_bytes != null
       ? Math.max(0, 1 - job.result_bytes / job.source_bytes)
       : null;
+  const running = RUNNING.includes(job.status);
+  const ok = job.status === "done" || job.status === "done_oversize";
 
   return (
     <div className="card">
       <div className="row">
-        <span>{LABEL[job.status]}</span>
+        <span className={ok ? "ok" : ""}>
+          {ok && "✓ "}
+          {LABEL[job.status]}
+        </span>
         <span className="muted">
           시도 {job.attempt} · {pct}%
         </span>
       </div>
-      <div className="bar">
+      <div className={`bar${ok ? " done" : ""}`}>
         <i style={{ width: `${pct}%` }} />
       </div>
 
       {job.result_bytes != null && (
         <div className="row">
-          <span className="muted">원본 → 결과</span>
+          <span className="label">원본 → 결과</span>
           <span>
             {mb(job.source_bytes)} → {mb(job.result_bytes)}
-            {saved != null && ` (${(saved * 100).toFixed(0)}% 절감)`}
+            {saved != null && <span className="ok"> ({(saved * 100).toFixed(0)}% 절감)</span>}
           </span>
         </div>
       )}
 
       {job.error && <p className="err">{job.error}</p>}
 
-      {(job.status === "done" || job.status === "done_oversize") && (
-        <p>
+      <div className="card-foot">
+        <button type="button" onClick={onRemove}>
+          {running ? "작업 취소" : "새로 시작"}
+        </button>
+        {ok && (
           <a href={downloadUrl(job.id)}>
-            <button type="button">다운로드</button>
+            <button type="button" className="primary">
+              다운로드
+            </button>
           </a>
-        </p>
-      )}
+        )}
+      </div>
     </div>
   );
 }

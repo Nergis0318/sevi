@@ -33,6 +33,7 @@ export function DropZone({
         if (!disabled) take(e.dataTransfer.files);
       }}
     >
+      <div className="icon">↑</div>
       <p>
         <strong>영상을 여기에 끌어다 놓거나</strong> 클릭해서 선택하세요
       </p>

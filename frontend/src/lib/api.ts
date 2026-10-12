@@ -1,7 +1,11 @@
+export type ProfileOption = { name: string; label: string };
+
 export type ConfigOut = {
   max_upload_bytes: number;
   target_bytes: number;
   max_duration_s: number;
+  profiles: ProfileOption[];
+  default_profile: string;
 };
 
 export type JobStatusOut = {
@@ -19,16 +23,24 @@ export type JobStatusOut = {
 
 export type JobCreated = { id: string; status: string };
 
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let detail = `요청에 실패했습니다 (${res.status})`;
     try {
       const body = await res.json();
-      if (body?.detail) detail = String(body.detail);
+      if (typeof body?.detail === "string") detail = body.detail;
     } catch {
       /* keep default */
     }
-    throw new Error(detail);
+    throw new ApiError(detail, res.status);
   }
   return res.json() as Promise<T>;
 }
@@ -53,12 +65,14 @@ export function downloadUrl(id: string): string {
 
 export function uploadJob(
   file: File,
+  profile: string,
   onProgress: (fraction: number) => void,
   signal?: AbortSignal,
 ): Promise<JobCreated> {
   return new Promise((resolve, reject) => {
     const form = new FormData();
     form.append("file", file);
+    form.append("profile", profile);
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/jobs");
     xhr.responseType = "json";
