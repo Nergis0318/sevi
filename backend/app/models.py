@@ -21,6 +21,7 @@ class Job(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     session_id: str = Field(index=True)
     status: JobStatus = Field(default=JobStatus.queued, index=True)
+    profile: str = Field(default="balanced")
     attempt: int = Field(default=0)
     progress: float = Field(default=0.0)
     source_name: str = Field(default="")

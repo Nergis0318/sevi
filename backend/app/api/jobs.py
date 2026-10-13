@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 
@@ -9,6 +9,7 @@ from app.api.deps import client_ip, get_ip_limiter, get_limiter, get_settings_de
 from app.db import get_session
 from app.models import Job, JobStatus, count_active, count_queued
 from app.paths import MediaPaths
+from app.profiles import PROFILES
 from app.ratelimit import RateLimitError, RateLimiter
 from app.schemas import JobCreated, JobStatusOut
 from app.settings import Settings
@@ -46,12 +47,16 @@ def _get_owned(job_id: uuid.UUID, session_id: str, session: Session) -> Job:
 async def create_job(
     request: Request,
     file: UploadFile,
+    profile: str | None = Form(None),
     session_id: str = Depends(require_session),
     settings: Settings = Depends(get_settings_dep),
     limiter: RateLimiter = Depends(get_limiter),
     ip_limiter: RateLimiter = Depends(get_ip_limiter),
     session: Session = Depends(get_session),
 ) -> JobCreated:
+    profile_name = profile or settings.default_profile
+    if profile_name not in PROFILES:
+        raise HTTPException(status_code=400, detail="지원하지 않는 프로필입니다.")
     ip = client_ip(request)
     try:
         limiter.check_upload(session_id)
@@ -104,6 +109,7 @@ async def create_job(
         id=job_id,
         session_id=session_id,
         status=JobStatus.queued,
+        profile=profile_name,
         source_name=(file.filename or "video")[:200],
         source_path=str(dest),
         source_bytes=size,

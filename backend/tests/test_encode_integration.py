@@ -6,6 +6,7 @@ import pytest
 
 from app.ffmpeg import EncodeError, build_cmd, encode_once
 from app.plan import EncodePlan, plan_encode
+from app.profiles import PROFILES
 
 
 @pytest.fixture(scope="module")
@@ -42,7 +43,7 @@ def src_video_only(tmp_path_factory):
 
 def test_build_cmd_uses_sw_scale_not_hwaccel():
     plan = EncodePlan(video_kbps=500, audio_kbps=96, height=360, has_audio=True, fps=30.0, duration_s=4.0)
-    cmd = build_cmd(ffmpeg_path="ffmpeg", src=Path("in.bin"), dst=Path("out.webm"), plan=plan, video_kbps=500)
+    cmd = build_cmd(ffmpeg_path="ffmpeg", src=Path("in.bin"), dst=Path("out.webm"), plan=plan, video_kbps=500, profile=PROFILES["balanced"])
     joined = " ".join(cmd)
     assert "-hwaccel" not in cmd
     assert "scale_qsv" not in joined
@@ -55,7 +56,7 @@ def test_build_cmd_uses_sw_scale_not_hwaccel():
 
 def test_build_cmd_no_audio_uses_an():
     plan = EncodePlan(video_kbps=500, audio_kbps=0, height=240, has_audio=False, fps=25.0, duration_s=3.0)
-    cmd = build_cmd(ffmpeg_path="ffmpeg", src=Path("in.bin"), dst=Path("out.webm"), plan=plan, video_kbps=500)
+    cmd = build_cmd(ffmpeg_path="ffmpeg", src=Path("in.bin"), dst=Path("out.webm"), plan=plan, video_kbps=500, profile=PROFILES["balanced"])
     assert "-an" in cmd
     assert "libopus" not in cmd
 
@@ -64,7 +65,7 @@ def test_encode_produces_target_format(src_av, tmp_path):
     plan = plan_encode(duration_s=4.0, fps=30.0, src_width=1280, src_height=720, has_audio=True, target_bytes=2_000_000)
     dst = tmp_path / "out.webm"
     seen = []
-    size = encode_once(src=src_av, dst=dst, plan=plan, video_kbps=plan.video_kbps, on_progress=seen.append)
+    size = encode_once(src=src_av, dst=dst, plan=plan, video_kbps=plan.video_kbps, profile=PROFILES["balanced"], on_progress=seen.append)
     assert dst.is_file()
     assert size > 0
     assert dst.stat().st_size == size
@@ -83,7 +84,7 @@ def test_encode_produces_target_format(src_av, tmp_path):
 def test_encode_video_only(src_video_only, tmp_path):
     plan = plan_encode(duration_s=3.0, fps=25.0, src_width=640, src_height=360, has_audio=False, target_bytes=1_000_000)
     dst = tmp_path / "out.webm"
-    encode_once(src=src_video_only, dst=dst, plan=plan, video_kbps=plan.video_kbps)
+    encode_once(src=src_video_only, dst=dst, plan=plan, video_kbps=plan.video_kbps, profile=PROFILES["balanced"])
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", str(dst)],
         capture_output=True, text=True, check=True,
@@ -96,7 +97,7 @@ def test_encode_failure_raises(tmp_path):
     plan = EncodePlan(video_kbps=500, audio_kbps=0, height=240, has_audio=False, fps=30.0, duration_s=1.0)
     missing = tmp_path / "nope.bin"
     with pytest.raises(EncodeError) as ei:
-        encode_once(src=missing, dst=tmp_path / "o.webm", plan=plan, video_kbps=500)
+        encode_once(src=missing, dst=tmp_path / "o.webm", plan=plan, video_kbps=500, profile=PROFILES["balanced"])
     assert ei.value.stderr
 
 
@@ -119,5 +120,5 @@ def test_encode_reaps_process_when_on_progress_raises(src_av, tmp_path, monkeypa
         raise RuntimeError("cancel")
 
     with pytest.raises(RuntimeError):
-        encode_once(src=src_av, dst=tmp_path / "out.webm", plan=plan, video_kbps=plan.video_kbps, on_progress=boom)
+        encode_once(src=src_av, dst=tmp_path / "out.webm", plan=plan, video_kbps=plan.video_kbps, profile=PROFILES["balanced"], on_progress=boom)
     assert procs and procs[0].poll() is not None

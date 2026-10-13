@@ -8,11 +8,12 @@ from sqlmodel import Session, select
 
 from app.converge import converge
 from app.db import engine, init_db
-from app.ffmpeg import encode_once
+from app.ffmpeg import EncodeError, check_qsv, encode_once
 from app.models import Job, JobStatus
 from app.paths import MediaPaths
 from app.plan import plan_encode
 from app.probe import ProbeError, probe
+from app.profiles import PROFILES
 from app.settings import Settings, get_settings
 
 log = logging.getLogger("sevi.worker")
@@ -87,6 +88,7 @@ def process_job(
 
     encode = encode_fn or encode_once
     src = paths.source(job.id)
+    profile = PROFILES.get(job.profile, PROFILES["balanced"])
 
     try:
         job.status = JobStatus.probing
@@ -112,6 +114,8 @@ def process_job(
             has_audio=info.has_audio,
             target_bytes=settings.target_bytes,
             min_video_kbps=settings.min_video_kbps,
+            bpp_target=profile.bpp_target,
+            audio_default_kbps=profile.audio_kbps,
         )
 
         dst = paths.result(job.id)
@@ -128,6 +132,7 @@ def process_job(
                 dst=dst,
                 plan=plan,
                 video_kbps=kbps,
+                profile=profile,
                 ffmpeg_path=settings.ffmpeg_path,
                 on_progress=_make_progress_cb(session, job),
             )
@@ -136,7 +141,7 @@ def process_job(
             target_bytes=settings.target_bytes,
             initial_kbps=plan.video_kbps,
             encode=_run,
-            max_attempts=settings.max_attempts,
+            max_attempts=profile.max_attempts,
             floor_kbps=settings.min_video_kbps,
         )
 
@@ -217,6 +222,12 @@ def run_forever(settings: Settings | None = None) -> None:
     paths = MediaPaths(settings.media_dir)
     settings.media_dir.mkdir(parents=True, exist_ok=True)
     log.info("worker started; media_dir=%s", settings.media_dir)
+    try:
+        check_qsv(ffmpeg_path=settings.ffmpeg_path)
+    except EncodeError as exc:
+        log.critical("QSV 점검 실패 — 워커를 시작할 수 없습니다.\n%s", exc)
+        raise SystemExit(2) from exc
+    log.info("QSV(vp9_qsv) 사용 가능")
 
     with Session(engine) as session:
         stale = reset_stale(session, paths)

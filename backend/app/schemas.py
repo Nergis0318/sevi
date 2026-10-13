@@ -19,7 +19,14 @@ class JobStatusOut(BaseModel):
     expires_at: str
 
 
+class ProfileOption(BaseModel):
+    name: str
+    label: str
+
+
 class ConfigOut(BaseModel):
     max_upload_bytes: int
     target_bytes: int
     max_duration_s: float
+    profiles: list[ProfileOption]
+    default_profile: str

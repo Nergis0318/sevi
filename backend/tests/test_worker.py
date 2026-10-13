@@ -240,3 +240,43 @@ def test_reset_stale_fails_stale_inflight_and_cleans_files(session, paths):
     session.refresh(done)
     assert done.status is JobStatus.done
     assert paths.job_dir(done.id).exists()
+
+
+def test_process_job_passes_profile_params(session, paths, settings, monkeypatch):
+    from app.profiles import PROFILES
+
+    job = _make_job(session, paths, profile="fast")
+    captured = {}
+    monkeypatch.setattr(
+        "app.worker.probe",
+        lambda *a, **k: ProbeResult(duration_s=2.0, width=640, height=360, fps=30.0, has_audio=True),
+    )
+
+    def fake_plan_encode(**k):
+        captured["plan_kwargs"] = k
+        return EncodePlan(video_kbps=500, audio_kbps=96, height=360, has_audio=True, fps=30.0, duration_s=2.0)
+
+    monkeypatch.setattr("app.worker.plan_encode", fake_plan_encode)
+
+    def fake_converge(**k):
+        captured["max_attempts"] = k["max_attempts"]
+        k["encode"](k["initial_kbps"])
+        return type("R", (), {"video_kbps": 500, "attempts": 1, "result_bytes": 1234, "converged": True})()
+
+    monkeypatch.setattr("app.worker.converge", fake_converge)
+
+    def fake_encode(**kwargs):
+        captured["profile"] = kwargs["profile"]
+        kwargs["dst"].parent.mkdir(parents=True, exist_ok=True)
+        kwargs["dst"].write_bytes(b"r")
+        return 1234
+
+    monkeypatch.setattr("app.worker.encode_once", fake_encode)
+    process_job(session, job, settings=settings, paths=paths)
+    session.refresh(job)
+
+    assert job.status is JobStatus.done
+    assert captured["profile"] is PROFILES["fast"]
+    assert captured["max_attempts"] == 1
+    assert captured["plan_kwargs"]["bpp_target"] == 0.075
+    assert captured["plan_kwargs"]["audio_default_kbps"] == 64

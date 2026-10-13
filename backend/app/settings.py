@@ -2,6 +2,8 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.profiles import DEFAULT_PROFILE
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="SEVI_", env_file=".env", extra="ignore")
@@ -19,8 +21,7 @@ class Settings(BaseSettings):
     rate_limit_per_hour_per_ip: int = 20
     max_queued_jobs: int = 20
     min_video_kbps: int = 80
-    max_attempts: int = 3
-    encode_preset: str = "medium"
+    default_profile: str = DEFAULT_PROFILE
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
     worker_poll_s: float = 1.0

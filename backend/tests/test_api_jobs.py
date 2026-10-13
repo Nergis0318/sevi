@@ -56,6 +56,47 @@ def test_config_endpoint(client):
     assert body["max_upload_bytes"] == 1024 * 1024
 
 
+def test_config_exposes_profiles(client):
+    body = client.get("/api/config").json()
+    assert [p["name"] for p in body["profiles"]] == ["fast", "balanced", "quality"]
+    assert body["default_profile"] == "balanced"
+    assert {p["name"]: p["label"] for p in body["profiles"]} == {
+        "fast": "빠름",
+        "balanced": "균형",
+        "quality": "품질",
+    }
+
+
+def test_upload_accepts_profile(client):
+    r = client.post(
+        "/api/jobs",
+        files={"file": ("clip.mp4", io.BytesIO(b"fake-video-bytes"), "video/mp4")},
+        data={"profile": "fast"},
+    )
+    assert r.status_code == 201
+    with Session(client.engine) as s:
+        job = s.get(Job, UUID(r.json()["id"]))
+        assert job.profile == "fast"
+
+
+def test_upload_defaults_to_balanced_profile(client):
+    r = _upload(client)
+    assert r.status_code == 201
+    with Session(client.engine) as s:
+        job = s.get(Job, UUID(r.json()["id"]))
+        assert job.profile == "balanced"
+
+
+def test_upload_rejects_unknown_profile(client):
+    r = client.post(
+        "/api/jobs",
+        files={"file": ("clip.mp4", io.BytesIO(b"fake-video-bytes"), "video/mp4")},
+        data={"profile": "turbo"},
+    )
+    assert r.status_code == 400
+    assert "프로필" in r.json()["detail"]
+
+
 def test_upload_creates_job_and_sets_cookie(client):
     r = _upload(client)
     assert r.status_code == 201

@@ -18,14 +18,21 @@ class EncodePlan:
     duration_s: float
 
 
-def pick_height(src_width: int, src_height: int, fps: float, video_bps: int) -> int:
+def pick_height(
+    src_width: int,
+    src_height: int,
+    fps: float,
+    video_bps: int,
+    *,
+    bpp_target: float = BPP_TARGET,
+) -> int:
     if src_width <= 0 or src_height <= 0:
         raise ValueError("소스 해상도가 유효하지 않습니다.")
     fps = fps if fps > 0 else 30.0
     candidates = sorted({h for h in LADDER if h <= src_height} | {src_height}, reverse=True)
     for h in candidates:
         w = src_width * h / src_height
-        if video_bps / (w * h * fps) >= BPP_TARGET:
+        if video_bps / (w * h * fps) >= bpp_target:
             return h
     return candidates[-1]
 
@@ -39,6 +46,8 @@ def plan_encode(
     has_audio: bool,
     target_bytes: int = 49_900_000,
     min_video_kbps: int = 80,
+    bpp_target: float = BPP_TARGET,
+    audio_default_kbps: int = AUDIO_DEFAULT_KBPS,
 ) -> EncodePlan:
     if duration_s <= 0:
         raise ValueError("재생 시간이 유효하지 않습니다.")
@@ -50,14 +59,14 @@ def plan_encode(
     audio_kbps = 0
     if has_audio:
         capped = int(budget_bps * AUDIO_SHARE_CAP / 1000)
-        audio_kbps = min(AUDIO_DEFAULT_KBPS, capped)
+        audio_kbps = min(audio_default_kbps, capped)
         if capped >= AUDIO_MIN_KBPS:
             audio_kbps = max(audio_kbps, AUDIO_MIN_KBPS)
 
     video_bps = budget_bps * CONTAINER_MARGIN - audio_kbps * 1000
     video_kbps = max(int(video_bps / 1000), min_video_kbps)
 
-    height = pick_height(src_width, src_height, fps, video_kbps * 1000)
+    height = pick_height(src_width, src_height, fps, video_kbps * 1000, bpp_target=bpp_target)
     return EncodePlan(
         video_kbps=video_kbps,
         audio_kbps=audio_kbps,

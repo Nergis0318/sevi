@@ -9,11 +9,15 @@ RUN bun run build
 # ---- runtime ----
 FROM python:3.13-slim
 
+# libmfx-gen1.2 : ffmpeg 의 vp9_qsv 는 oneVPL 로 MFX 세션을 연다. 디스패처(libvpl2)만
+#   있으면 구현체가 없어 "Error creating a MFX session: -9" 로 모든 잡이 실패한다.
+#   vainfo 는 libva 를 직접 쓰기 때문에 이 누락을 드러내지 못한다.
 RUN sed -i 's/Components: main/Components: main contrib non-free non-free-firmware/' \
         /etc/apt/sources.list.d/debian.sources \
     && apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
         intel-media-va-driver-non-free \
+        libmfx-gen1.2 \
         libva-drm2 \
         libva2 \
         vainfo \

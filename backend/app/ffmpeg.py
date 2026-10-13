@@ -4,12 +4,49 @@ from collections.abc import Callable
 from pathlib import Path
 
 from app.plan import EncodePlan
+from app.profiles import Profile
 
 
 class EncodeError(RuntimeError):
     def __init__(self, message: str, stderr: str = "") -> None:
-        super().__init__(message)
         self.stderr = stderr
+        # log.exception 은 str(exc)만 남긴다 — ffmpeg 원인이 메시지에 섞여야 로그로 진단된다.
+        tail = [ln for ln in stderr.strip().splitlines() if ln.strip()][-6:]
+        super().__init__(message + ("\n" + "\n".join(tail) if tail else ""))
+
+
+def check_qsv(*, ffmpeg_path: str = "ffmpeg") -> None:
+    """vp9_qsv 를 실제로 열어본다. 실패하면 명확한 원인으로 중단한다.
+
+    런타임 누락(예: 컨테이너에 libmfx-gen 부재)은 잡마다 같은 오류를 낼 뿐이고
+    로그엔 ffmpeg 원인도 남지 않는다 — 기동 시 한 번 확인해 빨리 죽인다.
+    """
+    cmd = [
+        ffmpeg_path, "-nostdin", "-hide_banner", "-loglevel", "error",
+        # 64x64 은 QSV 인코더가 거부한다(-22) — 최소한 320x240 을 쓴다.
+        "-f", "lavfi", "-i", "testsrc=size=320x240:rate=1:duration=0.1",
+        "-c:v", "vp9_qsv", "-frames:v", "1", "-f", "null", "-",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise EncodeError(f"QSV 자체 점검을 실행할 수 없습니다: {exc}") from exc
+    if proc.returncode != 0:
+        raise EncodeError(
+            "QSV(vp9_qsv) 인코더를 열 수 없습니다 — 하드웨어 가속 런타임을 확인하세요.",
+            stderr=proc.stderr or "",
+        )
+
+
+def _filter_chain(plan: EncodePlan, profile: Profile) -> str:
+    """sw 필터 체인. 불변: -2 폭, format=nv12 / hwaccel·scale_qsv·hwupload 금지."""
+    parts: list[str] = []
+    if plan.fps > 60:
+        parts.append("fps=60")
+    if profile.denoise:
+        parts.append(profile.denoise)
+    parts.append(f"scale=-2:{int(plan.height)}:flags={profile.scale_flags},format=nv12")
+    return ",".join(parts)
 
 
 def build_cmd(
@@ -19,6 +56,7 @@ def build_cmd(
     dst: Path,
     plan: EncodePlan,
     video_kbps: int,
+    profile: Profile,
 ) -> list[str]:
     v = int(video_kbps)
     cmd = [
@@ -30,12 +68,16 @@ def build_cmd(
     if plan.has_audio:
         cmd += ["-map", "0:a:0"]
     cmd += [
-        "-c:v", "vp9_qsv", "-preset", "medium",
+        "-c:v", "vp9_qsv", "-preset", profile.preset,
         "-b:v", f"{v}k",
-        "-maxrate", f"{int(v * 1.2)}k",
-        "-bufsize", f"{int(v * 2)}k",
-        "-vf", f"scale=-2:{int(plan.height)}:flags=bicubic,format=nv12",
+        "-maxrate", f"{int(v * profile.maxrate_mult)}k",
+        "-bufsize", f"{int(v * profile.bufsize_mult)}k",
     ]
+    if profile.tile_cols:
+        cmd += ["-tile_cols", str(profile.tile_cols)]
+    if profile.tile_rows:
+        cmd += ["-tile_rows", str(profile.tile_rows)]
+    cmd += ["-vf", _filter_chain(plan, profile)]
     if plan.has_audio:
         cmd += [
             "-c:a", "libopus",
@@ -57,11 +99,14 @@ def encode_once(
     dst: Path,
     plan: EncodePlan,
     video_kbps: int,
+    profile: Profile,
     ffmpeg_path: str = "ffmpeg",
     on_progress: Callable[[float], None] | None = None,
 ) -> int:
     dst.parent.mkdir(parents=True, exist_ok=True)
-    cmd = build_cmd(ffmpeg_path=ffmpeg_path, src=src, dst=dst, plan=plan, video_kbps=video_kbps)
+    cmd = build_cmd(
+        ffmpeg_path=ffmpeg_path, src=src, dst=dst, plan=plan, video_kbps=video_kbps, profile=profile
+    )
 
     try:
         proc = subprocess.Popen(
