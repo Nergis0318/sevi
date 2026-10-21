@@ -20,7 +20,10 @@ function mb(bytes: number): string {
 }
 
 export function App() {
-  const { data: config } = useQuery({ queryKey: ["config"], queryFn: getConfig });
+  const { data: config } = useQuery({
+    queryKey: ["config"],
+    queryFn: getConfig,
+  });
   const [phase, setPhase] = useState<"idle" | "upload" | "job">(() =>
     jobFromUrl() ? "job" : "idle",
   );
@@ -101,7 +104,12 @@ export function App() {
       const ac = new AbortController();
       uploadAbort.current = ac;
       try {
-        const created = await uploadJob(file, selectedProfile, setUploadPct, ac.signal);
+        const created = await uploadJob(
+          file,
+          selectedProfile,
+          setUploadPct,
+          ac.signal,
+        );
         if (ac.signal.aborted) return;
         window.history.pushState(null, "", `/?job=${created.id}`);
         setJobId(created.id);

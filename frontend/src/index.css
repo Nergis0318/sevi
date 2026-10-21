@@ -1,6 +1,10 @@
 :root {
   color-scheme: light dark;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
   line-height: 1.5;
   --bg: #f7f8fa;
   --surface: #fff;
@@ -50,7 +54,9 @@ h1 {
   text-align: center;
   cursor: pointer;
   background: var(--bg);
-  transition: border-color 0.15s, background 0.15s;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
 }
 .drop.over {
   border-color: var(--accent);

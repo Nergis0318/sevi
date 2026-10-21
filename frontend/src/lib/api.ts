@@ -10,7 +10,14 @@ export type ConfigOut = {
 
 export type JobStatusOut = {
   id: string;
-  status: "queued" | "probing" | "encoding" | "done" | "done_oversize" | "failed" | "cancelled";
+  status:
+    | "queued"
+    | "probing"
+    | "encoding"
+    | "done"
+    | "done_oversize"
+    | "failed"
+    | "cancelled";
   attempt: number;
   progress: number;
   source_name: string;
@@ -92,8 +99,10 @@ export function uploadJob(
       }
     };
     xhr.onerror = () => reject(new Error("네트워크 오류가 발생했습니다."));
-    xhr.onabort = () => reject(new DOMException("업로드가 중단되었습니다.", "AbortError"));
-    if (signal) signal.addEventListener("abort", () => xhr.abort(), { once: true });
+    xhr.onabort = () =>
+      reject(new DOMException("업로드가 중단되었습니다.", "AbortError"));
+    if (signal)
+      signal.addEventListener("abort", () => xhr.abort(), { once: true });
     if (signal?.aborted) {
       xhr.abort();
       return;

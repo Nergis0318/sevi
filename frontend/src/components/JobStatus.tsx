@@ -52,7 +52,9 @@ export function JobStatus({
           <span className="label">원본 → 결과</span>
           <span>
             {mb(job.source_bytes)} → {mb(job.result_bytes)}
-            {saved != null && <span className="ok"> ({(saved * 100).toFixed(0)}% 절감)</span>}
+            {saved != null && (
+              <span className="ok"> ({(saved * 100).toFixed(0)}% 절감)</span>
+            )}
           </span>
         </div>
       )}

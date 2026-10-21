@@ -15,20 +15,20 @@
 
 ## 2. 결정 사항
 
-| 항목 | 결정 |
-|---|---|
-| 사용 모델 | 공개 사이트, 익명 |
-| 인증 | 계정 없음. IP 레이트리밋 + 서명 쿠키(`sv_session`) |
-| 백엔드 | Python 3.13+ / FastAPI / SQLModel / uv |
-| 프런트 | React / Vite / TypeScript / Tailwind / shadcn/ui / TanStack Router / bun |
-| DB | PostgreSQL |
-| 작업 큐 | Postgres 백엔드 큐 (`FOR UPDATE SKIP LOCKED`) + 전용 워커 컨테이너 |
-| 배포 | Docker Compose (TLS·외부 도메인은 앞단 Caddy 소관) |
-| 업로드 한도 | 800MB |
-| 목표 크기 | 49,900,000 B (49.9 decimal MB) — `TARGET_BYTES` env로 변경 가능 |
-| 긴 영상 | 해상도 자동 다운스케일 |
-| 보관 | 결과 24시간 후 자동 삭제. 원본은 인코딩 종료 즉시 삭제 |
-| 워커 동시성 | 1 (QSV 엔진 1개) |
+| 항목        | 결정                                                                     |
+| ----------- | ------------------------------------------------------------------------ |
+| 사용 모델   | 공개 사이트, 익명                                                        |
+| 인증        | 계정 없음. IP 레이트리밋 + 서명 쿠키(`sv_session`)                       |
+| 백엔드      | Python 3.13+ / FastAPI / SQLModel / uv                                   |
+| 프런트      | React / Vite / TypeScript / Tailwind / shadcn/ui / TanStack Router / bun |
+| DB          | PostgreSQL                                                               |
+| 작업 큐     | Postgres 백엔드 큐 (`FOR UPDATE SKIP LOCKED`) + 전용 워커 컨테이너       |
+| 배포        | Docker Compose (TLS·외부 도메인은 앞단 Caddy 소관)                       |
+| 업로드 한도 | 800MB                                                                    |
+| 목표 크기   | 49,900,000 B (49.9 decimal MB) — `TARGET_BYTES` env로 변경 가능          |
+| 긴 영상     | 해상도 자동 다운스케일                                                   |
+| 보관        | 결과 24시간 후 자동 삭제. 원본은 인코딩 종료 즉시 삭제                   |
+| 워커 동시성 | 1 (QSV 엔진 1개)                                                         |
 
 기각된 대안: Celery+Redis(인프라 과다), FastAPI 인프로세스 워커(내구성 없음).
 
@@ -148,14 +148,14 @@ tick (1s 간격, 또는 NOTIFY):
 
 ## 5. API
 
-| 메서드 | 경로 | 설명 |
-|---|---|---|
-| `POST` | `/api/jobs` | multipart `file` → `{id, status}`. `sv_session` 쿠키 발급/검증 |
-| `GET` | `/api/jobs/{id}` | `{status, attempt, progress, source_bytes, result_bytes, error}` |
-| `GET` | `/api/jobs/{id}/download` | `.webm` 스트리밍, `Content-Disposition: attachment` |
-| `DELETE` | `/api/jobs/{id}` | 취소 + 파일 삭제 |
-| `GET` | `/api/config` | `{max_upload_bytes, target_bytes, max_duration_s}` |
-| `GET` | `/api/health` | QSV 가용성 + DB 연결 |
+| 메서드   | 경로                      | 설명                                                             |
+| -------- | ------------------------- | ---------------------------------------------------------------- |
+| `POST`   | `/api/jobs`               | multipart `file` → `{id, status}`. `sv_session` 쿠키 발급/검증   |
+| `GET`    | `/api/jobs/{id}`          | `{status, attempt, progress, source_bytes, result_bytes, error}` |
+| `GET`    | `/api/jobs/{id}/download` | `.webm` 스트리밍, `Content-Disposition: attachment`              |
+| `DELETE` | `/api/jobs/{id}`          | 취소 + 파일 삭제                                                 |
+| `GET`    | `/api/config`             | `{max_upload_bytes, target_bytes, max_duration_s}`               |
+| `GET`    | `/api/health`             | QSV 가용성 + DB 연결                                             |
 
 - `POST`는 `Content-Length`/Starlette 업로드 리밋 800MB, 앞단 Caddy의 요청 본문 상한도 동일
 - 다운로드는 소유 세션만. 타인 세션은 404
@@ -163,15 +163,15 @@ tick (1s 간격, 또는 NOTIFY):
 
 ## 6. 보안
 
-| 위협 | 대응 |
-|---|---|
-| 무제한 업로드 | IP+세션당 5건/시간, 세션당 활성 1건, 전역 동시 1건 |
-| 경로 조작 | 파일명 전부 UUID v4. 사용자 파일명·확장자 무시 |
-| 메타데이터 유출 | `-map_metadata -1 -map_chapters -1` |
-| 셸 인젝션 | `subprocess` 리스트 인자. 사용자 값은 인자 값으로만 |
-| 타인 파일 접근 | 잡 소유권 = 서명 쿠키 `sv_session` (HMAC-SHA256 서명된 랜덤 16B, HttpOnly, SameSite=Lax, Secure, 7일) |
-| 손상/비디오 아님 | ffprobe: 비디오 스트림 필수, `0 < duration <= 6h`, 컨테이너 인식 가능 |
-| 파일 스토리지 | 앱 루트 밖 전용 볼륨. 서버 정적 서빙 경로와 분리 |
+| 위협             | 대응                                                                                                  |
+| ---------------- | ----------------------------------------------------------------------------------------------------- |
+| 무제한 업로드    | IP+세션당 5건/시간, 세션당 활성 1건, 전역 동시 1건                                                    |
+| 경로 조작        | 파일명 전부 UUID v4. 사용자 파일명·확장자 무시                                                        |
+| 메타데이터 유출  | `-map_metadata -1 -map_chapters -1`                                                                   |
+| 셸 인젝션        | `subprocess` 리스트 인자. 사용자 값은 인자 값으로만                                                   |
+| 타인 파일 접근   | 잡 소유권 = 서명 쿠키 `sv_session` (HMAC-SHA256 서명된 랜덤 16B, HttpOnly, SameSite=Lax, Secure, 7일) |
+| 손상/비디오 아님 | ffprobe: 비디오 스트림 필수, `0 < duration <= 6h`, 컨테이너 인식 가능                                 |
+| 파일 스토리지    | 앱 루트 밖 전용 볼륨. 서버 정적 서빙 경로와 분리                                                      |
 
 추가: 비디오 스트림만 사용, 자막/데이터 스트림 무시. 오디오 첫 스트림만.
 

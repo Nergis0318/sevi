@@ -94,10 +94,12 @@ sevi/
 ### Task 1: 스캐폴드 — uv 프로젝트, 설정, DB, health
 
 **Files:**
+
 - Create: `backend/pyproject.toml`, `backend/app/__init__.py`, `backend/app/settings.py`, `backend/app/db.py`, `backend/app/main.py`, `backend/app/api/__init__.py`, `backend/app/api/health.py`
 - Test: `backend/tests/conftest.py`, `backend/tests/test_health.py`
 
 **Interfaces:**
+
 - Consumes: 없음
 - Produces:
   - `app.settings.Settings` (dataclass-like, `get_settings() -> Settings`)
@@ -293,10 +295,12 @@ git commit -m "feat: scaffold FastAPI backend with settings, db, health endpoint
 ### Task 2: 비트레이트 예산 + 해상도 사다리 (순수)
 
 **Files:**
+
 - Create: `backend/app/plan.py`
 - Test: `backend/tests/test_plan.py`
 
 **Interfaces:**
+
 - Consumes: 없음 (순수 함수)
 - Produces:
   - `EncodePlan` frozen dataclass: `video_kbps: int`, `audio_kbps: int`, `height: int`, `has_audio: bool`, `fps: float`, `duration_s: float`
@@ -483,10 +487,12 @@ git commit -m "feat: bitrate budget and resolution ladder for target size fittin
 ### Task 3: 보정 루프 (순수, 인코더 주입)
 
 **Files:**
+
 - Create: `backend/app/converge.py`
 - Test: `backend/tests/test_converge.py`
 
 **Interfaces:**
+
 - Consumes: 없음
 - Produces:
   - `ConvergeResult` frozen dataclass: `video_kbps: int`, `attempts: int`, `result_bytes: int`, `converged: bool`
@@ -666,10 +672,12 @@ git commit -m "feat: iterative bitrate convergence loop for size targeting"
 ### Task 4: ffprobe 검증 + 메타데이터 추출
 
 **Files:**
+
 - Create: `backend/app/probe.py`
 - Test: `backend/tests/test_probe.py`
 
 **Interfaces:**
+
 - Consumes: 없음
 - Produces:
   - `ProbeResult` frozen dataclass: `duration_s: float`, `width: int`, `height: int`, `fps: float`, `has_audio: bool`
@@ -889,10 +897,12 @@ git commit -m "feat: ffprobe validation and metadata extraction"
 ### Task 5: 미디어 경로 + jobs 모델
 
 **Files:**
+
 - Create: `backend/app/paths.py`, `backend/app/models.py`
 - Test: `backend/tests/test_paths.py`, `backend/tests/test_models.py`
 
 **Interfaces:**
+
 - Consumes: 없음
 - Produces:
   - `MediaPaths(root: Path)` with `job_dir(job_id: UUID) -> Path`, `source(job_id) -> Path`, `result(job_id) -> Path`, `prepare(job_id) -> Path`, `remove_job(job_id) -> None`
@@ -1123,10 +1133,12 @@ git commit -m "feat: media path layout and job model"
 ### Task 6: 세션 쿠키 + 레이트리밋
 
 **Files:**
+
 - Create: `backend/app/session.py`, `backend/app/ratelimit.py`
 - Test: `backend/tests/test_session.py`, `backend/tests/test_ratelimit.py`
 
 **Interfaces:**
+
 - Consumes: 없음
 - Produces:
   - `SESSION_COOKIE: str = "sv_session"`
@@ -1347,10 +1359,12 @@ git commit -m "feat: signed session cookie and in-memory rate limiter"
 ### Task 7: ffmpeg 인코더 + 진행률
 
 **Files:**
+
 - Create: `backend/app/ffmpeg.py`
 - Test: `backend/tests/test_encode_integration.py`
 
 **Interfaces:**
+
 - Consumes: `EncodePlan` from Task 2
 - Produces:
   - `class EncodeError(RuntimeError)` with `.stderr: str`
@@ -1605,11 +1619,13 @@ git commit -m "feat: ffmpeg vp9_qsv/opus encoder with live progress"
 ### Task 8: API — 업로드/상태/다운로드/삭제/config
 
 **Files:**
+
 - Create: `backend/app/api/deps.py`, `backend/app/api/jobs.py`, `backend/app/api/config.py`, `backend/app/schemas.py`
 - Modify: `backend/app/main.py` (라우터 등록, 정적 서빙)
 - Test: `backend/tests/test_api_jobs.py`
 
 **Interfaces:**
+
 - Consumes: Task 1 `Settings`, `get_session`; Task 5 `Job`, `JobStatus`, `MediaPaths`; Task 6 `issue`, `verify`, `SESSION_COOKIE`, `RateLimiter`, `RateLimitError`
 - Produces:
   - `app.api.deps.require_session(request, response) -> str` (Depends)
@@ -2092,10 +2108,12 @@ git commit -m "feat: job upload, status, download, delete and config API"
 ### Task 9: 워커 — 큐 클레임, 인코딩, 정리
 
 **Files:**
+
 - Create: `backend/app/worker.py`
 - Test: `backend/tests/test_worker.py`
 
 **Interfaces:**
+
 - Consumes: Task 2 `plan_encode`, Task 3 `converge`, Task 4 `probe`, Task 5 `Job`/`JobStatus`/`MediaPaths`, Task 7 `encode_once`
 - Produces:
   - `sweep(session: Session, paths: MediaPaths, *, now: datetime | None = None) -> int`
@@ -2481,10 +2499,12 @@ git commit -m "feat: background worker with job claiming, encoding and expiry sw
 ### Task 10: 프런트엔드
 
 **Files:**
+
 - Create: `frontend/package.json`, `frontend/tsconfig.json`, `frontend/vite.config.ts`, `frontend/index.html`, `frontend/src/main.tsx`, `frontend/src/index.css`, `frontend/src/routes/index.tsx`, `frontend/src/components/DropZone.tsx`, `frontend/src/components/JobStatus.tsx`, `frontend/src/lib/api.ts`
 - Test: 없음 (수동 확인 + `bun run typecheck` + `bun run build`)
 
 **Interfaces:**
+
 - Consumes: `POST /api/jobs`, `GET /api/jobs/{id}`, `GET /api/jobs/{id}/download`, `GET /api/config`
 - Produces: 정적 빌드 산출물 `frontend/dist/` (Task 11 Docker가 복사)
 
@@ -2574,27 +2594,79 @@ export default defineConfig({
 ```css
 :root {
   color-scheme: light dark;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
   line-height: 1.5;
 }
-body { margin: 0; }
-#root { max-width: 720px; margin: 0 auto; padding: 2rem 1rem; }
+body {
+  margin: 0;
+}
+#root {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
 .drop {
-  border: 2px dashed #8884; border-radius: 12px; padding: 3rem 1rem;
-  text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+  border: 2px dashed #8884;
+  border-radius: 12px;
+  padding: 3rem 1rem;
+  text-align: center;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
 }
-.drop.over { border-color: #4f8; background: #4f81; }
-.bar { height: 10px; background: #8883; border-radius: 999px; overflow: hidden; }
-.bar > i { display: block; height: 100%; background: #4f8; transition: width .3s; }
-.card { border: 1px solid #8883; border-radius: 12px; padding: 1.25rem; margin-top: 1rem; }
-.row { display: flex; justify-content: space-between; padding: .25rem 0; }
-.muted { opacity: .65; font-size: .9em; }
-.err { color: #e55; }
+.drop.over {
+  border-color: #4f8;
+  background: #4f81;
+}
+.bar {
+  height: 10px;
+  background: #8883;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.bar > i {
+  display: block;
+  height: 100%;
+  background: #4f8;
+  transition: width 0.3s;
+}
+.card {
+  border: 1px solid #8883;
+  border-radius: 12px;
+  padding: 1.25rem;
+  margin-top: 1rem;
+}
+.row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.25rem 0;
+}
+.muted {
+  opacity: 0.65;
+  font-size: 0.9em;
+}
+.err {
+  color: #e55;
+}
 button {
-  font: inherit; padding: .65rem 1.25rem; border-radius: 10px; border: 0;
-  background: #4f8; color: #062; cursor: pointer; font-weight: 600;
+  font: inherit;
+  padding: 0.65rem 1.25rem;
+  border-radius: 10px;
+  border: 0;
+  background: #4f8;
+  color: #062;
+  cursor: pointer;
+  font-weight: 600;
 }
-button:disabled { opacity: .5; cursor: not-allowed; }
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 ```
 
 - [ ] **Step 2: API 클라이언트 작성**
@@ -2610,7 +2682,14 @@ export type ConfigOut = {
 
 export type JobStatusOut = {
   id: string;
-  status: "queued" | "probing" | "encoding" | "done" | "done_oversize" | "failed" | "cancelled";
+  status:
+    | "queued"
+    | "probing"
+    | "encoding"
+    | "done"
+    | "done_oversize"
+    | "failed"
+    | "cancelled";
   attempt: number;
   progress: number;
   source_name: string;
@@ -2843,7 +2922,10 @@ function mb(bytes: number): string {
 }
 
 export function App() {
-  const { data: config } = useQuery({ queryKey: ["config"], queryFn: getConfig });
+  const { data: config } = useQuery({
+    queryKey: ["config"],
+    queryFn: getConfig,
+  });
   const [phase, setPhase] = useState<"idle" | "upload" | "job">("idle");
   const [uploadPct, setUploadPct] = useState(0);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -2980,10 +3062,12 @@ git commit -m "feat: frontend dropzone, progress and download UI"
 ### Task 11: Docker Compose + QSV 셋업
 
 **Files:**
+
 - Create: `docker/Dockerfile`, `compose.yml`, `.env.example`, `.gitignore`
 - Test: 없음 (`docker compose config` 검증 + 수동 기동)
 
 **Interfaces:**
+
 - Consumes: Task 1–10 전체, `frontend/dist/`
 - Produces: `docker compose up`으로 동작하는 배포
 
@@ -3162,23 +3246,23 @@ git commit -m "feat: docker compose deployment with QSV passthrough"
 
 ### 1. Spec coverage
 
-| 스펙 § | 요구사항 | 태스크 |
-|---|---|---|
-| 2 | 익명 + 쿠키 + IP 레이트리밋 | T6, T8 |
-| 2 | Postgres 큐 + 워커 | T5, T9 |
-| 2 | 800MB / 6h / 24h / 동시성 1 | T1, T8, T9 |
-| 3.1 | 예산 배분, 오디오 12% 상한·48 하한 | T2 |
-| 3.2 | 해상도 사다리, bpp 0.06 | T2 |
-| 3.3 | 보정 루프 3회, 80kbps 하한, 0.92 창 | T3 |
-| 3.4 | ffmpeg 인자, map_metadata, webm | T7 |
-| 4.1 | jobs 스키마 | T5 |
-| 4.2 | 워커 루프, 재시작 시 실패 처리 | T9 |
-| 5 | API 6개 엔드포인트 | T8 |
-| 6 | 보안 표 전체 | T5(경로), T6(쿠키/리밋), T7(메타), T8(업로드/소유권) |
-| 7 | 정리: 만료 스위프, 원본 즉시 삭제 | T9 |
-| 8 | Docker + QSV 디바이스 | T11 |
-| 9 | 프런트 5단계 흐름 | T10 |
-| 10 | 테스트 4종 | T2, T3, T4, T7, T8, T9 |
+| 스펙 § | 요구사항                            | 태스크                                               |
+| ------ | ----------------------------------- | ---------------------------------------------------- |
+| 2      | 익명 + 쿠키 + IP 레이트리밋         | T6, T8                                               |
+| 2      | Postgres 큐 + 워커                  | T5, T9                                               |
+| 2      | 800MB / 6h / 24h / 동시성 1         | T1, T8, T9                                           |
+| 3.1    | 예산 배분, 오디오 12% 상한·48 하한  | T2                                                   |
+| 3.2    | 해상도 사다리, bpp 0.06             | T2                                                   |
+| 3.3    | 보정 루프 3회, 80kbps 하한, 0.92 창 | T3                                                   |
+| 3.4    | ffmpeg 인자, map_metadata, webm     | T7                                                   |
+| 4.1    | jobs 스키마                         | T5                                                   |
+| 4.2    | 워커 루프, 재시작 시 실패 처리      | T9                                                   |
+| 5      | API 6개 엔드포인트                  | T8                                                   |
+| 6      | 보안 표 전체                        | T5(경로), T6(쿠키/리밋), T7(메타), T8(업로드/소유권) |
+| 7      | 정리: 만료 스위프, 원본 즉시 삭제   | T9                                                   |
+| 8      | Docker + QSV 디바이스               | T11                                                  |
+| 9      | 프런트 5단계 흐름                   | T10                                                  |
+| 10     | 테스트 4종                          | T2, T3, T4, T7, T8, T9                               |
 
 누락 없음.
 
